@@ -1,0 +1,37 @@
+---
+title: Personal Voice Agent
+description: A private, on-device voice interface for macOS that learns your style without taking uncontrolled actions in your name.
+---
+
+Personal Voice Agent is a voice interface for macOS that answers **without ever pretending to be
+you**. A Swift/SwiftUI app hosts Apple's on-device Speech, FoundationModels and the system voice;
+a small Rust service — `voice-session`, launched as a child process — owns consent, deadlines,
+the ledger and every decision about what may be spoken or executed.
+
+The rules it holds itself to:
+
+- **Consent before capture.** The microphone opens only while you hold push-to-talk, and only after
+  you grant capture. Revoking takes effect on disk first, so even a service that never reads the
+  message starts up revoked.
+- **Heard ≠ inferred ≠ executed.** What you said, what the model proposed and what actually ran are
+  separate ledger records. A spoken "done" requires tool-result evidence; the completion-claim
+  guard keeps model text from claiming it.
+- **Interrupt means stop.** Late audio from an old turn can never play; a call already sent is
+  `uncertain` until evidence reconciles it.
+- **Nothing external in the first release.** An action that would touch the world outside this Mac
+  is refused before any confirmation — there is no way to authorize it.
+- **Everything stays local.** No audio is retained, no network is used, and the ledger, consent and
+  lock files are owner-only and excluded from backup.
+
+```text not-run="a statement of the product's shape, not a command"
+app (Swift, Apple providers) ── stdin/stdout JSON lines ── voice-session (Rust: consent, deadlines, ledger)
+```
+
+## Where to go next
+
+- [Quick start](/quick-start/) — build it on a Mac and run a real local turn.
+- [Concepts](/concepts/) — the model: turns, consent, the ledger, fail-closed.
+- [Consent and permissions](/consent-and-permissions/) — the tokens, revocation, macOS prompts.
+- [Protocol reference](/api/reference/) — every message, checked against the wire.
+- [Operating](/operating/data-directory/) — what's on disk, retention, recovery.
+- [Changelog](/changelog/) — what changed, newest first.

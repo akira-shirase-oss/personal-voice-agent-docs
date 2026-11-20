@@ -1,0 +1,87 @@
+# What every change to the docs must pass, and what runs each night against personal-voice-agent
+# main:
+#
+#   check      node unit tests, check-urls, the protocol bidirectional check, snippet coverage,
+#              the Astro build (internal links, CSP hashes, Markdown twins), check-dist,
+#              check-privacy — scripts/check.sh.
+#   protocol   src/data/protocol.json covers every message type and field the wire's golden lines
+#              carry, in both directions — against fixtures/protocol/ on the product's main.
+#   snippets   every run= block executes for real: voice-session is built from the product's main
+#              and driven over the protocol, and each output= block must match its answers.
+name: ci
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '37 5 * * *' # nightly: catch the product's main moving under the docs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: tests, checks, build, dist and privacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Check out personal-voice-agent main for PROTOCOL.md and the golden lines
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: akira-shirase-oss/personal-voice-agent
+          path: personal-voice-agent
+          persist-credentials: false
+      - name: The whole gate, against the product's main
+        run: PVA_DIR=personal-voice-agent scripts/check.sh
+
+  snippets:
+    name: examples run against personal-voice-agent main
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Check out personal-voice-agent main to build voice-session from
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: akira-shirase-oss/personal-voice-agent
+          path: personal-voice-agent
+          persist-credentials: false
+      - name: The steps the pages run, in order
+        run: node scripts/snippets.mjs --list
+      - name: Install the toolchain the product pins (its rust-toolchain.toml)
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' personal-voice-agent/rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: personal-voice-agent
+      - name: Run every example against the real service
+        run: PVA_DIR=personal-voice-agent node scripts/snippets.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: snippets
+          path: .snippets/run/
+          if-no-files-found: ignore
+          retention-days: 7

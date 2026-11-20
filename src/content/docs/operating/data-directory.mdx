@@ -1,0 +1,56 @@
+---
+title: The data directory
+description: What's on disk for Personal Voice Agent — layout, permissions, the lock, and why audio never appears.
+---
+
+Everything the service keeps lives under one directory (the app's container data dir by default;
+`--data-dir` selects another). It is the source of truth for consent, history and liveness.
+
+## Layout
+
+```text not-run="a map of the directory, not a command"
+<data-dir>/                    mode 0700 — owner only
+├── lock                       0600 — the single-instance lock (pid inside)
+├── consent.log                0600 — append-only consent record, checksummed
+├── consent.capture.granted    0600 — capture consent token (absent or 0000 = revoked)
+└── ledger/                    0700 — the turn ledger
+    ├── <session>.log          0600 — append-only, checksummed records
+    └── <session>.closed.log   0600 — a finished session's log
+```
+
+- **Permissions are repaired, never loosened.** At open, anything looser is tightened by stripping
+  group/other bits — a `0755` directory becomes `0700`, a `0644` file `0600`. Bits are only ever
+  removed: a `0500` directory stays `0500` and open fails honestly rather than grant write.
+- **No symlinks.** A store file that is a link — to anywhere — is refused at open, never followed;
+  the target is never read, written or chmodded. A planted subdirectory inside `ledger/` is refused:
+  the store has no subdirectories by design.
+- **Excluded from backup** (`com.apple.metadata:com_apple_backup_excludeItem`): transcripts don't
+  belong in a disk image you handed to a backup service.
+- **No audio, ever.** Only records: heard transcripts, proposals, outcomes. Nothing here can replay
+  your voice.
+
+## The lock
+
+`lock` holds the running service's pid under an exclusive flock. A second `voice-session` on the
+same directory answers `error` `already_running` and exits (code 6). If the pid inside is a stale
+orphan (its parent app died), the app stops it and takes over; a live one is waited on, retrying
+after 250 ms, doubling to at most 5 s, for as long as it takes.
+
+## Opening a directory
+
+```sh run=session
+pva_start "$PVA_WORK/data-dir"
+pva_send '{"type":"hello","protocol":1,"client":"docs"}'
+pva_expect
+ls -lA "$PVA_WORK/data-dir" "$PVA_WORK/data-dir/ledger" | awk 'NF>1 {print $1}' | sort -u
+pva_stop
+```
+
+```text output=session match=lines
+{"type":"ready","protocol":1,"session":"01a1f9a8-af26-729d-b701-e9650382cd02","consent":{"capture":false,"personal_voice":false},"recovered":{"sessions":0,"abandoned_turns":0,"uncertain_calls":0,"torn_tails":0}}
+-rw-------@
+drwx------@
+total
+```
+
+Every entry is owner-only: `drwx------` directories, `-rw-------` files, whatever they started as.

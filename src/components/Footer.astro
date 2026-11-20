@@ -1,0 +1,76 @@
+---
+/**
+ * Starlight's footer (edit link, last updated, previous/next), with a "Was this page helpful?" prompt
+ * above it. The site is static and keeps no analytics, so an answer opens a short, prefilled issue on
+ * GitHub rather than pretending to record a vote.
+ */
+import Default from '@astrojs/starlight/components/Footer.astro';
+
+const route = Astro.locals.starlightRoute;
+const title = route.entry?.data?.title ?? 'this page';
+const url = new URL(Astro.url.pathname, Astro.site ?? 'https://docs.personal-voice-agent.404human.dev').href;
+const issue = (verdict: 'helpful' | 'not helpful') => {
+	const params = new URLSearchParams({
+		title: `Docs: "${title}" was ${verdict}`,
+		labels: 'docs-feedback',
+		body: `Page: ${url}\n\nWhat ${verdict === 'helpful' ? 'worked' : 'was missing or wrong'}:\n\n`,
+	});
+	return `https://github.com/akira-shirase-oss/personal-voice-agent-docs/issues/new?${params}`;
+};
+---
+
+<div class="helpful not-content print:hidden" role="group" aria-labelledby="helpful-q">
+	<p id="helpful-q">Was this page helpful?</p>
+	<div class="helpful-answers">
+		<a href={issue('helpful')} rel="noopener" target="_blank">Yes</a>
+		<a href={issue('not helpful')} rel="noopener" target="_blank">No</a>
+	</div>
+	<p class="helpful-note">Either answer opens a short issue on GitHub, so you can say what worked or what was missing.</p>
+</div>
+<Default />
+
+<style>
+	.helpful {
+		margin-top: 3rem;
+		padding: 1rem 1.125rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 0.25rem 1rem;
+		align-items: center;
+	}
+	.helpful p {
+		margin: 0;
+	}
+	#helpful-q {
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.helpful-answers {
+		display: flex;
+		gap: 0.5rem;
+	}
+	.helpful-answers a {
+		font-size: var(--sl-text-sm);
+		text-decoration: none;
+		color: var(--sl-color-gray-1);
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.375rem;
+		padding: 0.25rem 0.875rem;
+	}
+	.helpful-answers a:hover {
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-accent-high);
+	}
+	.helpful-note {
+		grid-column: 1 / -1;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	@media (max-width: 30rem) {
+		.helpful {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

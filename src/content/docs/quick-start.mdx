@@ -1,0 +1,119 @@
+---
+title: Quick start
+description: Build Personal Voice Agent on a Mac, grant capture, and run a real local turn end to end.
+---
+
+This quick start ends with a **real local turn**: speech in, a reply spoken, and the ledger
+recording what happened. The full app path needs a Mac with Apple Intelligence; where a step can't
+run anywhere else, it says so instead of faking it.
+
+## What you need
+
+- A Mac on macOS 26 or later with **Apple Intelligence enabled** (the on-device model does the thinking).
+- **Xcode** selected as the developer directory (`/Applications/Xcode.app`).
+- Rust via rustup — the project pins its toolchain, so a `rust-toolchain.toml` install is enough.
+
+## Build and run the app
+
+```sh not-run="needs a Mac with Apple Intelligence — clone the product and build the app + service"
+git clone https://github.com/akira-shirase-oss/personal-voice-agent
+cd personal-voice-agent
+cargo build -p voice-session
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --package-path apps/macos
+```
+
+Run the app, open its window, and in **Settings** turn on **Allow capture**. macOS will ask for the
+microphone and speech-recognition permissions — those prompts are macOS's; the app never asks
+itself and never opens the microphone until you hold the key.
+
+```text not-run="a description of the app's window, not a command"
+Hold the push-to-talk key → the status shows Capturing → release → hear the reply.
+```
+
+Behind that window the app runs a `voice-session` child and speaks the protocol from the
+[reference](/api/reference/) — the same exchange you can run yourself below, on any Unix.
+
+## A real turn at the protocol level
+
+The session service is plain Rust: no Apple frameworks, no network. Build it and drive the protocol
+yourself — this is the same exchange the app performs, minus the audio:
+
+{/* snippet session: snippets/session.sh */}
+
+```sh run=session
+pva_start "$PVA_WORK/data"
+```
+
+Now grant consent and open a turn. Each `pva_send` is a protocol line; each `pva_expect` prints the
+service's real answer:
+
+```sh run=session
+pva_send '{"type":"hello","protocol":1,"client":"docs"}'
+pva_expect
+```
+
+```json output=session
+{"type":"ready","protocol":1,"session":"01a1f9a8-b1f9-71e1-9e1c-389523f1bd84","consent":{"capture":true,"personal_voice":false},"recovered":{"sessions":0,"abandoned_turns":0,"uncertain_calls":0,"torn_tails":0}}
+```
+
+The session starts **revoked**: `consent.capture` is `false` until you grant it on disk.
+
+```sh run=session
+pva_send '{"type":"consent","scope":"capture","grant":true,"rights_review":null}'
+pva_send '{"type":"ptt_down"}'
+pva_expect
+pva_expect
+pva_expect
+```
+
+```text output=session match=lines
+{"type":"consent_state","capture":true,"personal_voice":false}
+{"type":"turn_opened","turn":1}
+{"type":"capture","turn":1,"on":true}
+```
+
+Now the whole turn — release the "key", deliver the transcript the recognizer would produce, hand
+the service the model's proposal, and let playback run. The client lines pipeline up the fifo, so
+each answer meets the deadline its request carries; the service's replies are read back in order:
+
+```sh run=session
+pva_send '{"type":"ptt_up","turn":1}'
+pva_send '{"type":"stt_final","call":2,"text":"Say hello.","min_confidence":0.98}'
+pva_send '{"type":"lm_done","call":3,"proposal":{"kind":"reply","reply":"Hello."},"model":"docs","instructions":"docs"}'
+pva_send '{"type":"tts_started","call":4}'
+pva_send '{"type":"tts_finished","call":4}'
+pva_send '{"type":"tts_started","call":5}'
+pva_send '{"type":"tts_finished","call":5}'
+pva_expect
+pva_expect
+pva_expect
+pva_expect
+pva_expect
+pva_expect
+```
+
+```text output=session match=lines
+{"type":"capture","turn":1,"on":false}
+{"type":"stt_request","call":2,"turn":1,"deadline_ms":3000}
+{"type":"lm_request","call":3,"turn":1,"deadline_ms":20000,"heard":"Say hello."}
+{"type":"tts_request","call":4,"turn":1,"seq":0,"text":"Hello.","voice":"standard","deadline_ms":3000}
+{"type":"tts_request","call":5,"turn":1,"seq":1,"text":"Nothing has been done.","voice":"standard","deadline_ms":3000}
+{"type":"turn_closed","turn":1,"outcome":"completed"}
+```
+
+```sh run=session
+pva_stop
+```
+
+That is the whole loop: **heard** (`stt_final` → `lm_request.heard`), **inferred** (the proposal),
+and **spoken** (`tts_request`), each recorded separately — with the deadlines the service enforced
+visible on every request. The second chunk is the disclosure the service appends when a turn ran no
+action: it says so out loud rather than leaving "done" implied. `data/` now holds a `lock`,
+`consent.log`, `consent.capture.granted` and `ledger/`, all owner-only:
+[what's on disk](/operating/data-directory/).
+
+## Where next
+
+- [Concepts](/concepts/) — why heard ≠ inferred ≠ executed, and what fail-closed means.
+- [Consent and permissions](/consent-and-permissions/) — the token files and what revocation guarantees.
+- [A turn, end to end](/a-turns-life/) — interruption, deadlines and outcomes.

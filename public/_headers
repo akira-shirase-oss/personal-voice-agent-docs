@@ -1,0 +1,17 @@
+# Security headers for every response from Cloudflare Pages.
+# Scripts come from this site only. The few inline scripts Starlight writes are
+# allowed by their SHA-256 hashes: scripts/csp-hashes.mjs puts them in place of
+# INLINE_SCRIPT_HASHES after the build, so no other inline script runs. Styles keep
+# 'unsafe-inline' (Starlight sets inline styles; a style can't send data anywhere under
+# this connect-src). Search runs WebAssembly, hence 'wasm-unsafe-eval'. Pages connect
+# only to this site: the docs never call out, by design.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' INLINE_SCRIPT_HASHES; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+
+/*.md
+  Content-Type: text/markdown; charset=utf-8

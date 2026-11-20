@@ -1,0 +1,444 @@
+---
+/**
+ * The changelog: one file per change in src/content/changelog, newest first, grouped by month.
+ * Each entry has an anchor (its file name), a type and the areas it touches; the filter is a few
+ * lines of script that hide what doesn't match, and the page works without it.
+ *
+ * Each entry is a card (an accordion: a button in the heading controls the entry's body): its type as an icon, the title, a one-line summary
+ * (the entry's first sentence) and chips for the date, the type and the areas. Opening it shows the
+ * whole entry. An entry's #anchor opens it; Enter or Space toggles it, Esc closes it; without
+ * JavaScript every entry is shown in full.
+ */
+
+/** One icon per change type (outline, 20px), always beside the type's name, never colour alone. */
+const ICONS: Record<string, string> = {
+	Feature: 'M12 5v14M5 12h14',
+	Improvement: 'M12 19V5M6 11l6-6 6 6',
+	Fix: 'M5 12.5l4.5 4.5L19 7.5',
+	Security: 'M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z',
+	Breaking: 'M12 4l9 16H3L12 4zM12 10v4M12 17.5v.01',
+	Deprecation: 'M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
+};
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { render } from 'astro:content';
+import { CHANGE_AREAS, CHANGE_TYPES } from '../../content.config';
+import { anchorOf, byMonth, changes, dayOf, summaryOf } from '../../lib/changelog';
+
+const entries = await changes();
+const months = byMonth(entries);
+const rendered = new Map(await Promise.all(entries.map(async (entry) => [entry.id, (await render(entry)).Content] as const)));
+const count = (type: string) => entries.filter((entry) => entry.data.type === type).length;
+const countArea = (area: string) => entries.filter((entry) => entry.data.areas.includes(area as never)).length;
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Changelog',
+		description: 'What changed in Personal Voice Agent, newest first: features, improvements, fixes, security fixes and breaking changes, each dated and linked to the docs.',
+		editUrl: 'https://github.com/akira-shirase-oss/personal-voice-agent-docs/tree/main/src/content/changelog',
+		tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
+		pagefind: true,
+	}}
+	headings={months.map((month) => ({ depth: 2, slug: `m-${month.id}`, text: month.label }))}
+>
+	<p class="lede">
+		Every change that reached Personal Voice Agent's <code>main</code> branch and that you can see or use, newest first. Each
+		entry is dated the day it landed, labelled with its type and the areas it touches, and links to the docs. Entries are
+		grouped by month rather than by version.{' '}
+		<a href="/changelog/rss.xml">Subscribe with RSS</a>.
+	</p>
+
+	{/* The cards' icons, once: each card refers to them, so the entries don't repeat them. */}
+	<svg class="change-sprite" aria-hidden="true" width="0" height="0">
+		{Object.entries(ICONS).map(([type, path]) => (
+			<symbol id={`change-icon-${type.toLowerCase()}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+				<path d={path} />
+			</symbol>
+		))}
+		<symbol id="change-icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+			<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
+			<circle cx="12" cy="12" r="3" />
+		</symbol>
+	</svg>
+
+	<div class="filters not-content" id="changelog-filters" hidden>
+		<div role="group" aria-label="Filter by type">
+			<button type="button" class="filter" data-filter="all" aria-pressed="true">All <span>{entries.length}</span></button>
+			{CHANGE_TYPES.filter((type) => count(type) > 0).map((type) => (
+				<button type="button" class="filter" data-filter={`type:${type}`} aria-pressed="false">
+					{type} <span>{count(type)}</span>
+				</button>
+			))}
+		</div>
+		<div role="group" aria-label="Filter by area">
+			{CHANGE_AREAS.filter((area) => countArea(area) > 0).map((area) => (
+				<button type="button" class="filter" data-filter={`area:${area}`} aria-pressed="false">
+					{area} <span>{countArea(area)}</span>
+				</button>
+			))}
+		</div>
+		<p class="filter-status" aria-live="polite"></p>
+	</div>
+
+	{
+		months.map((month) => (
+			<section class="changelog-month-block" data-month>
+				<h2 id={`m-${month.id}`} class="changelog-month">
+					{month.label}
+				</h2>
+				{month.entries.map((entry) => {
+					const Content = rendered.get(entry.id)!;
+					const id = anchorOf(entry);
+					const type = entry.data.type;
+					return (
+						<article class={`change change-${type.toLowerCase()}`} id={id} data-type={type} data-areas={entry.data.areas.join(',')}>
+							<div class="change-head">
+								<h3 class="change-heading">
+									<button type="button" class="change-toggle" aria-expanded="true" aria-controls={`${id}-body`} aria-describedby={`${id}-summary ${id}-chips`}>
+										<span class="change-icon" aria-hidden="true">
+											<svg width="20" height="20"><use href={`#change-icon-${type.toLowerCase()}`} /></svg>
+										</span>
+										<span class="change-title" id={`${id}-title`}>{entry.data.title}</span>
+									</button>
+								</h3>
+								<p class="change-summary" id={`${id}-summary`}>{summaryOf(entry)}</p>
+								<p class="change-chips" id={`${id}-chips`}>
+									<time class="chip" datetime={entry.data.date.toISOString().slice(0, 10)}>{dayOf(entry.data.date)}</time>
+									<span class={`chip chip-type chip-${type.toLowerCase()}`}>{type}</span>
+									{entry.data.areas.map((area) => (
+										<span class="chip">{area}</span>
+									))}
+								</p>
+								<span class="change-eye" aria-hidden="true">
+									<svg width="20" height="20"><use href="#change-icon-eye" /></svg>
+								</span>
+							</div>
+							<div class="change-body" id={`${id}-body`}>
+								<Content />
+								{entry.data.removal && (
+									<p class="removal">
+										Stops working on <time datetime={entry.data.removal.toISOString().slice(0, 10)}>{dayOf(entry.data.removal)}</time>.
+									</p>
+								)}
+								<p class="change-docs">
+									{entry.data.docs.length > 0 && (
+										<>
+											Read more:{' '}
+											{entry.data.docs.map((link, index) => (
+												<>
+													{index > 0 && ' · '}
+													<a href={link.href}>{link.label}</a>
+												</>
+											))}
+											{' · '}
+										</>
+									)}
+									<a href={`#${id}`}>Link to this change</a>
+								</p>
+							</div>
+						</article>
+					);
+				})}
+			</section>
+		))
+	}
+</StarlightPage>
+
+<script>
+	// Without this script every entry is shown in full. With it, each card is collapsed to its title,
+	// summary and chips; its button (Enter or Space, or a click anywhere on the header) opens it, Esc closes the open one the focus is in,
+	// and an entry's #anchor opens it, on arrival and when the hash changes.
+	const toggles = [...document.querySelectorAll<HTMLButtonElement>('article.change .change-toggle')];
+	const setOpen = (toggle: HTMLButtonElement, open: boolean) => {
+		toggle.setAttribute('aria-expanded', String(open));
+		const body = document.getElementById(toggle.getAttribute('aria-controls') ?? '');
+		if (body) body.hidden = !open;
+	};
+	const openFromHash = () => {
+		const target = location.hash.length > 1 ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null;
+		const toggle = target?.matches('article.change') ? target.querySelector<HTMLButtonElement>('.change-toggle') : null;
+		if (toggle && target) {
+			setOpen(toggle, true);
+			target.scrollIntoView({ block: 'start' });
+		}
+	};
+	for (const toggle of toggles) {
+		setOpen(toggle, false);
+		toggle.addEventListener('click', () => {
+			const open = toggle.getAttribute('aria-expanded') !== 'true';
+			setOpen(toggle, open);
+			const id = toggle.closest('article')?.id;
+			if (open && id && location.hash !== `#${id}`) history.replaceState(null, '', `#${id}`);
+		});
+	}
+	// The button holds only the title (its name is what it shows, WCAG 2.5.3); a click anywhere else
+	// on the card's header toggles it too, for the mouse. Links and selected text are left alone, and
+	// keyboard focus stays on the button.
+	for (const head of document.querySelectorAll<HTMLElement>('article.change .change-head')) {
+		head.addEventListener('click', (event) => {
+			const target = event.target as HTMLElement;
+			if (target.closest('.change-toggle, a') || (getSelection()?.toString() ?? '') !== '') return;
+			head.querySelector<HTMLButtonElement>('.change-toggle')?.click();
+		});
+	}
+	openFromHash();
+	addEventListener('hashchange', openFromHash);
+	addEventListener('keydown', (event) => {
+		if (event.key !== 'Escape') return;
+		const toggle = (document.activeElement as HTMLElement | null)?.closest('article.change')?.querySelector<HTMLButtonElement>('.change-toggle[aria-expanded="true"]');
+		if (toggle) {
+			setOpen(toggle, false);
+			toggle.focus();
+		}
+	});
+
+	const bar = document.getElementById('changelog-filters');
+	if (bar) {
+		bar.hidden = false;
+		const buttons = [...bar.querySelectorAll<HTMLButtonElement>('[data-filter]')];
+		const status = bar.querySelector('.filter-status');
+		const apply = (filter: string) => {
+			let shown = 0;
+			for (const article of document.querySelectorAll<HTMLElement>('article.change')) {
+				const [kind, value] = filter.split(':');
+				const match = filter === 'all' || (kind === 'type' ? article.dataset.type === value : (article.dataset.areas ?? '').split(',').includes(value ?? ''));
+				article.hidden = !match;
+				if (match) shown += 1;
+			}
+			for (const month of document.querySelectorAll('[data-month]')) {
+				month.hidden = month.querySelector('article.change:not([hidden])') === null;
+			}
+			for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.filter === filter));
+			if (status) status.textContent = filter === 'all' ? '' : `Showing ${shown} of ${buttons[0]?.querySelector('span')?.textContent ?? ''} changes.`;
+		};
+		for (const button of buttons) button.addEventListener('click', () => apply(button.dataset.filter ?? 'all'));
+	}
+</script>
+
+<style is:global>
+	.lede {
+		color: var(--sl-color-gray-2);
+	}
+	.filters {
+		display: grid;
+		gap: 0.5rem;
+		margin-block: 1.5rem 0.5rem;
+	}
+	.filters [role='group'] {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
+	}
+	.filter {
+		font: inherit;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-2);
+		background: transparent;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 999px;
+		padding: 0.2rem 0.65rem;
+		cursor: pointer;
+	}
+	.filter span {
+		color: var(--sl-color-gray-3);
+	}
+	.filter[aria-pressed='true'] {
+		background: var(--sl-color-accent-low);
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-accent-high);
+	}
+	.filter-status {
+		margin: 0;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+		min-height: 1.2em;
+	}
+	.changelog-month {
+		margin-top: 2.5rem;
+		padding-bottom: 0.375rem;
+		border-bottom: 1px solid var(--sl-color-hairline);
+	}
+	/* A card: a surface a step off the page, a hairline border, 16px corners. */
+	.change {
+		margin-top: 1rem;
+		scroll-margin-top: calc(var(--sl-nav-height) + 1rem);
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 16px;
+		background: var(--card-bg);
+		transition: background-color 120ms ease, border-color 120ms ease;
+	}
+	.change[hidden],
+	[data-month][hidden] {
+		display: none;
+	}
+	/* The header: the button (icon and title) on the first row, the summary and chips under the
+	   title, the eye in the last column. The whole header is clickable; only the button is focusable. */
+	.change-head {
+		display: grid;
+		grid-template-columns: 20px minmax(0, 1fr) 20px;
+		gap: 0.25rem 1rem;
+		align-items: start;
+		padding: 1rem 1.25rem;
+		cursor: pointer;
+	}
+	.change-heading {
+		grid-column: 1 / 3;
+		grid-row: 1;
+		margin: 0;
+		font: inherit;
+		min-width: 0;
+	}
+	.change-toggle {
+		display: grid;
+		width: 100%;
+		text-align: start;
+		font: inherit;
+		color: inherit;
+		background: transparent;
+		border: 0;
+		padding: 0;
+		grid-template-columns: 20px minmax(0, 1fr);
+		gap: 1rem;
+		align-items: start;
+		cursor: pointer;
+		border-radius: 6px;
+	}
+	.change-toggle:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 4px;
+	}
+	/* Open, targeted by the address, hovered or focused: lighter, with a soft sheen. */
+	.change:hover,
+	.change:focus-within,
+	.change:target {
+		background: var(--card-bg-hover);
+	}
+	.change:has(.change-toggle[aria-expanded='true']),
+	.change:target {
+		background: linear-gradient(180deg, var(--card-sheen), transparent 70%), var(--card-bg-open);
+		border-color: var(--card-border-open);
+	}
+	.change-sprite {
+		position: absolute;
+		width: 0;
+		height: 0;
+		overflow: hidden;
+	}
+	.change-eye {
+		grid-column: 3;
+		grid-row: 1;
+	}
+	.change-icon,
+	.change-eye {
+		display: grid;
+		place-items: center;
+		width: 20px;
+		height: 20px;
+		margin-top: 0.3rem;
+		color: var(--sl-color-gray-2);
+	}
+	.change-icon {
+		border-radius: 6px;
+	}
+	.change-eye {
+		color: var(--sl-color-gray-3);
+	}
+	.change:hover .change-eye,
+	.change:has(.change-toggle[aria-expanded='true']) .change-eye {
+		color: var(--sl-color-white);
+	}
+	.change-title {
+		margin: 0;
+		font-size: 1.375rem;
+		line-height: 1.3;
+		color: var(--sl-color-white);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.change-summary,
+	.change-chips {
+		grid-column: 2;
+		margin: 0;
+	}
+	.change-summary {
+		font-size: 0.9375rem;
+		line-height: 1.45;
+		color: var(--card-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	/* Open, the body starts with the same sentence, so the summary line steps aside. */
+	.change:has(.change-toggle[aria-expanded='true']) .change-summary {
+		display: none;
+	}
+	.change-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
+		margin-top: 0.25rem;
+	}
+	.chip {
+		font-size: var(--sl-text-xs);
+		line-height: 1.5;
+		padding: 0.1rem 0.55rem;
+		border-radius: 999px;
+		background: var(--chip-bg);
+		color: var(--sl-color-gray-2);
+		font-variant-numeric: tabular-nums;
+	}
+	.chip-type {
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	/* Security and breaking changes: a quiet tint beside their icon and their name. */
+	.change-security,
+	.change-breaking {
+		background: linear-gradient(0deg, var(--card-attention), var(--card-attention)), var(--card-bg);
+	}
+	.change-security .change-icon,
+	.change-breaking .change-icon,
+	.chip-security,
+	.chip-breaking {
+		color: var(--c-warn);
+	}
+	.change-body {
+		padding: 0 1.25rem 1.25rem calc(1.25rem + 20px + 1rem);
+	}
+	.change-docs,
+	.removal {
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+	}
+	@media (max-width: 50rem) {
+		.change-head {
+			gap: 0.25rem 0.75rem;
+			padding: 0.875rem 1rem;
+		}
+		.change-toggle {
+			gap: 0.75rem;
+		}
+		.change-title {
+			font-size: 1.1875rem;
+			white-space: normal;
+			display: -webkit-box;
+			-webkit-box-orient: vertical;
+			-webkit-line-clamp: 2;
+		}
+		.change-summary {
+			white-space: normal;
+			display: -webkit-box;
+			-webkit-box-orient: vertical;
+			-webkit-line-clamp: 2;
+		}
+		.change-body {
+			padding: 0 1rem 1rem;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.change {
+			transition: none;
+		}
+	}
+</style>

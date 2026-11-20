@@ -1,0 +1,296 @@
+{
+	"source": "docs/PROTOCOL.md (v1)",
+	"framing": {
+		"format": "JSON lines over stdin/stdout",
+		"max_line_bytes": 65536,
+		"first_message": "hello"
+	},
+	"app_to_service": {
+		"hello": {
+			"fields": [
+				"protocol",
+				"client"
+			],
+			"meaning": "Handshake; answered by `ready`"
+		},
+		"ptt_down": {
+			"fields": [],
+			"meaning": "Open a new turn; interrupts an active one first"
+		},
+		"ptt_up": {
+			"fields": [
+				"turn"
+			],
+			"meaning": "Push-to-talk released for that turn"
+		},
+		"interrupt": {
+			"fields": [],
+			"meaning": "Stop the active turn (playback, calls)"
+		},
+		"stt_final": {
+			"fields": [
+				"call",
+				"text",
+				"min_confidence"
+			],
+			"meaning": "The recognizer's final text for the turn"
+		},
+		"lm_kind": {
+			"fields": [
+				"call",
+				"kind"
+			],
+			"meaning": "The proposal's kind, streamed first"
+		},
+		"lm_sentence": {
+			"fields": [
+				"call",
+				"index",
+				"text"
+			],
+			"meaning": "One completed reply sentence"
+		},
+		"lm_done": {
+			"fields": [
+				"call",
+				"proposal",
+				"model",
+				"instructions"
+			],
+			"meaning": "The complete proposal"
+		},
+		"tts_started": {
+			"fields": [
+				"call"
+			],
+			"meaning": "First buffer of that chunk is scheduled on the player"
+		},
+		"tts_finished": {
+			"fields": [
+				"call"
+			],
+			"meaning": "That chunk finished playing"
+		},
+		"stt_failed": {
+			"fields": [
+				"call",
+				"reason"
+			],
+			"meaning": "Provider failure (reason codes below)"
+		},
+		"lm_failed": {
+			"fields": [
+				"call",
+				"reason"
+			],
+			"meaning": "Provider failure (reason codes below)"
+		},
+		"tts_failed": {
+			"fields": [
+				"call",
+				"reason"
+			],
+			"meaning": "Provider failure (reason codes below)"
+		},
+		"confirm": {
+			"fields": [
+				"turn",
+				"digest",
+				"approve"
+			],
+			"meaning": "The user's decision on a `confirm_request`"
+		},
+		"consent": {
+			"fields": [
+				"scope",
+				"grant",
+				"rights_review"
+			],
+			"meaning": "Grant or revoke"
+		},
+		"flush": {
+			"fields": [],
+			"meaning": "Barrier: answered by `flushed` once every earlier record is durable"
+		},
+		"ping": {
+			"fields": [
+				"seq"
+			],
+			"meaning": "Liveness: answered by `pong` at once, without touching the ledger"
+		},
+		"forget": {
+			"fields": [
+				"scope"
+			],
+			"meaning": "Carry out that consent scope's deletion scope now (capture: every heard transcript); refused while a turn is open. Every log is deleted before the fresh one is created (no free space needed); answered by `forgotten`, or by `error` `forget_failed` if anything could not be deleted"
+		},
+		"shutdown": {
+			"fields": [],
+			"meaning": "End the session cleanly"
+		}
+	},
+	"service_to_app": {
+		"ready": {
+			"fields": [
+				"protocol",
+				"session",
+				"consent",
+				"recovered"
+			],
+			"meaning": "Handshake reply after recovery"
+		},
+		"turn_opened": {
+			"fields": [
+				"turn"
+			],
+			"meaning": "A new turn exists"
+		},
+		"capture": {
+			"fields": [
+				"turn",
+				"on"
+			],
+			"meaning": "Start/stop feeding the recognizer for that turn"
+		},
+		"stt_request": {
+			"fields": [
+				"call",
+				"turn",
+				"deadline_ms"
+			],
+			"meaning": "Finalize recognition and send `stt_final`"
+		},
+		"lm_request": {
+			"fields": [
+				"call",
+				"turn",
+				"deadline_ms",
+				"heard"
+			],
+			"meaning": "Run the language model on the heard text (data, not instructions)"
+		},
+		"tts_request": {
+			"fields": [
+				"call",
+				"turn",
+				"seq",
+				"text",
+				"voice",
+				"deadline_ms"
+			],
+			"meaning": "Synthesize and play this chunk, tagged with turn + seq"
+		},
+		"cancel": {
+			"fields": [
+				"call"
+			],
+			"meaning": "Stop that provider call; any later reply is dropped"
+		},
+		"stop_playback": {
+			"fields": [
+				"fence"
+			],
+			"meaning": "Stop playing; never play any chunk whose turn is below `fence`"
+		},
+		"confirm_request": {
+			"fields": [
+				"turn",
+				"digest",
+				"heard",
+				"tool",
+				"slots",
+				"reasons"
+			],
+			"meaning": "Ask the user; show `heard` verbatim"
+		},
+		"turn_closed": {
+			"fields": [
+				"turn",
+				"outcome"
+			],
+			"meaning": "Final outcome of the turn"
+		},
+		"degraded": {
+			"fields": [
+				"turn",
+				"stage",
+				"reason"
+			],
+			"meaning": "A provider or the ledger failed; nothing was invented"
+		},
+		"consent_state": {
+			"fields": [
+				"capture",
+				"personal_voice"
+			],
+			"meaning": "Current consent after any change"
+		},
+		"notice": {
+			"fields": [
+				"code",
+				"turn"
+			],
+			"meaning": "A refused request (e.g. `consent_required`, `invalid_transition`), or `nothing_done`: the turn may have claimed an action and ended (interrupted, degraded, refused) before it could say nothing was done; the app shows it with the turn"
+		},
+		"flushed": {
+			"fields": [
+				"seq"
+			],
+			"meaning": "Every record up to `seq` is durable"
+		},
+		"executed": {
+			"fields": [
+				"turn",
+				"call",
+				"status"
+			],
+			"meaning": "A tool call of this turn has a result on record (the ledger's `executed`); what the app shows as executed"
+		},
+		"pong": {
+			"fields": [
+				"seq"
+			],
+			"meaning": "Answer to `ping` with the same `seq`"
+		},
+		"forgotten": {
+			"fields": [
+				"scope",
+				"files",
+				"bytes"
+			],
+			"meaning": "A `forget` was carried out"
+		},
+		"error": {
+			"fields": [
+				"code",
+				"detail"
+			],
+			"meaning": "Protocol-level error; `detail` never contains content"
+		}
+	},
+	"enums": {
+		"slot_kinds": [
+			"amount",
+			"datetime",
+			"person",
+			"recipient",
+			"text"
+		],
+		"provider_failure_reasons": [
+			"unavailable",
+			"model_not_ready"
+		],
+		"turn_outcomes": [
+			"completed",
+			"interrupted",
+			"degraded",
+			"refused",
+			"rejected"
+		],
+		"confirmation_reasons": [
+			"reasons",
+			"irreversible_effect",
+			"sensitive_slot"
+		]
+	}
+}

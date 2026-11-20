@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://docs.personal-voice-agent.404human.dev/sitemap-index.xml

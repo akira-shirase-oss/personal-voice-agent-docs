@@ -1,0 +1,112 @@
+---
+/**
+ * The session protocol reference, rendered from src/data/protocol.json — itself generated from the
+ * product's docs/PROTOCOL.md and checked both ways against the wire's golden lines by CI
+ * (scripts/gen-protocol.mjs, scripts/check-protocol.mjs).
+ */
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import spec from '../../data/protocol.json';
+
+const directions = [
+	{ key: 'app_to_service', title: 'App → service', note: 'One JSON object per line on the child\'s stdin.' },
+	{ key: 'service_to_app', title: 'Service → app', note: 'One JSON object per line on the child\'s stdout.' },
+];
+const enumLabels = {
+	slot_kinds: 'Slot kinds',
+	provider_failure_reasons: 'Provider failure reasons',
+	turn_outcomes: 'Turn outcomes',
+	confirmation_reasons: 'Confirmation reasons',
+};
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Session protocol reference',
+		description:
+			'Every message in the app↔service protocol v1: JSON lines over the child\'s stdin and stdout, with each message\'s fields and meaning — generated from PROTOCOL.md and checked against the golden lines.',
+	}}
+	headings={[
+		{ depth: 2, slug: 'framing', text: 'Framing' },
+		...directions.map((d) => ({ depth: 2, slug: d.key.replaceAll('_', '-'), text: d.title })),
+		{ depth: 2, slug: 'identifiers', text: 'Identifiers' },
+		{ depth: 2, slug: 'enumerations', text: 'Enumerations' },
+		{ depth: 2, slug: 'ordering', text: 'Ordering guarantees' },
+	]}
+>
+	<p>
+		This is Personal Voice Agent's only "API": the line protocol between the app and the
+		<code>voice-session</code> child it launches. It is generated from the product's
+		<code>docs/PROTOCOL.md</code> and verified both ways against the golden lines the Rust and
+		Swift suites decode — a message or field that exists only here, or only on the wire, fails CI.
+		The raw document is at <a href="/protocol.json"><code>/protocol.json</code></a>.
+	</p>
+
+	<h2 id="framing">Framing</h2>
+	<ul>
+		<li>One JSON object per line, UTF-8, terminated by <code>\n</code>, carrying a <code>"type"</code>.</li>
+		<li>A line over {spec.framing.max_line_bytes.toLocaleString()} bytes is rejected (<code>error</code> <code>line_too_long</code>) and discarded to its newline.</li>
+		<li>An unknown <code>type</code> or malformed JSON is <code>error</code> <code>bad_message</code>; the session continues.</li>
+		<li>The first app message must be <code>{spec.framing.first_message}</code>; anything else first is <code>error</code> <code>hello_required</code>.</li>
+		<li>stdin EOF ends the session cleanly.</li>
+		<li>Audio never crosses this boundary: it stays in the app and is never written to disk.</li>
+	</ul>
+
+	{
+		directions.map(({ key, title, note }) => (
+			<>
+				<h2 id={key.replaceAll('_', '-')}>{title}</h2>
+				<p>{note}</p>
+				<table>
+					<thead>
+						<tr>
+							<th><code>type</code></th>
+							<th>Fields</th>
+							<th>Meaning</th>
+						</tr>
+					</thead>
+					<tbody>
+						{Object.entries(spec[key]).map(([type, message]) => (
+							<tr>
+								<td><code>{type}</code></td>
+								<td>{message.fields.length === 0 ? '—' : message.fields.map((f) => <code>{f}</code>).reduce((a, b) => <>{a}, {b}</>)}</td>
+								<td>{message.meaning}</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</>
+		))
+	}
+
+	<h2 id="identifiers">Identifiers</h2>
+	<ul>
+		<li><code>turn</code> — u64, increasing within a session; <code>0</code> is never used.</li>
+		<li><code>call</code> — u64, increasing within a session; one per provider request, capture window or tool call.</li>
+		<li><code>digest</code> — 16 hex digits binding a confirmation to one proposal of one turn. A binding identifier, not a cryptographic hash.</li>
+		<li><code>session</code> — the service's run id (a UUID), reported once in <code>ready</code>.</li>
+		<li><code>seq</code> — a chunk's order inside its turn (<code>tts_request</code>), or a liveness/flush counter (<code>ping</code>→<code>pong</code>, <code>flush</code>→<code>flushed</code>).</li>
+	</ul>
+
+	<h2 id="enumerations">Enumerations</h2>
+	<dl>
+		{Object.entries(spec.enums).map(([key, list]) => (
+			<>
+				<dt>{enumLabels[key] ?? key}</dt>
+				<dd>{list.map((v) => <code>{v}</code>).reduce((a, b) => <>{a}, {b}</>)}</dd>
+			</>
+		))}
+	</dl>
+	<p>
+		The <code>proposal</code> an <code>lm_done</code> carries is <code>{`{"kind":"reply","reply":"…"}`}</code> or
+		<code>{`{"kind":"action","reply":"…","tool":"…","slots":[{"name":"…","kind":"…","value":"…"}]}`}</code>.
+		An action's <code>reply</code> is never spoken. There is no external-effect confirmation reason: an external
+		tool is refused before any confirmation, because no external action can be authorized in the first release.
+	</p>
+
+	<h2 id="ordering">Ordering guarantees</h2>
+	<ul>
+		<li>For a turn, the service sends <code>capture on</code> only after <code>turn_opened</code>, and every provider request for turn N before <code>turn_closed</code> for N.</li>
+		<li><code>stop_playback</code> for an interrupted turn is sent before the <code>turn_closed</code> that records the interruption, and before <code>turn_opened</code> of a following turn.</li>
+		<li>After <code>cancel</code>, replies for that <code>call</code> are dropped (and recorded as dropped); they never change the turn.</li>
+	</ul>
+</StarlightPage>

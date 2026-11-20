@@ -1,0 +1,51 @@
+---
+title: A turn, end to end
+description: The lifecycle of a turn — open, heard, inferred, spoken, closed — including interruption, deadlines and every outcome.
+---
+
+A turn is one exchange: you hold the key, speak, release; the agent answers. Everything about it is
+bounded and recorded.
+
+## The happy path
+
+1. `ptt_down` → `turn_opened` + `capture` on. If a turn was active it is interrupted first.
+2. `ptt_up` → `stt_request` — finalize recognition within `deadline_ms`.
+3. `stt_final` → `lm_request` carrying `heard` verbatim — data, never instructions.
+4. `lm_done` → for a `reply`, one `tts_request` per sentence (`seq` orders them); for an `action`,
+   `confirm_request` — or a refusal if the tool is external.
+5. `tts_started`/`tts_finished` per chunk → `turn_closed` with the final `outcome`.
+
+```text not-run="the turn's state machine in words — the reference has every field"
+open → heard → inferred → spoken → closed(completed)
+  ↘ interrupted, degraded, refused, rejected, expired,
+    consent_revoked, empty, abandoned
+```
+
+## Interrupt means stop
+
+`interrupt` (or a new `ptt_down`) stops the turn cold:
+
+- every in-flight provider call gets `cancel`; replies that arrive late are dropped and recorded
+  as dropped — they never change the turn;
+- `stop_playback` carries a `fence`: nothing from a turn below it can ever play — a late audio
+  chunk from the old turn is dead on arrival;
+- `stop_playback` lands **before** the `turn_closed` that records the interruption and before the
+  next `turn_opened`.
+
+A tool call already sent stays `uncertain` — reported `executed` with `status: "uncertain"` —
+until evidence reconciles it. The service never guesses a result.
+
+## Deadlines are always on
+
+Every `stt_request`, `lm_request` and `tts_request` carries `deadline_ms`. A stage that misses it
+turns `degraded` with its `stage` and `reason` — the turn closes honestly instead of hanging, and
+nothing is invented to fill the gap.
+
+## Nothing external, ever
+
+A proposal whose tool would act outside this Mac is refused with `notice`
+`external_not_authorized` **before** any confirmation — there is no reason code for it, because no
+external action can be authorized in the first release. Confirmable actions ask with
+`confirm_request`, showing `heard` verbatim and `reasons` like `irreversible_effect`,
+`sensitive_slot` or `slot_not_heard`; your `confirm` answers against one `digest`, which binds the
+decision to exactly one proposal of one turn.

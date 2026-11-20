@@ -1,0 +1,39 @@
+---
+title: Retention, deletion and backups
+description: What Personal Voice Agent keeps, for how long, what "delete" really removes, and how backups treat it.
+---
+
+## What's kept
+
+Only records, never audio: the heard transcript, the model's proposal, the decision and the
+outcome — append-only, checksummed, grouped per session under `ledger/`, plus the consent record.
+Closed session logs are renamed `*.closed.log` so the active one is always distinguishable.
+
+## Retention
+
+Ledger history expires on a schedule the service runs continuously — not only at launch, so an app
+left open still expires entries. Expired sessions' logs are deleted; consent records are kept as
+long as the directory lives because they are the audit trail of permission itself.
+
+## What deletion really does
+
+"Delete history" is a `forget` with `scope: "capture"`: **every** heard transcript goes — each old
+log is deleted before the fresh one is created, so it needs no free space. The answer is
+`forgotten` with `files` and `bytes` — or `error` `forget_failed` naming what couldn't be deleted.
+Nothing claims erasure beyond that scope, and the tests prove it on full disks: revocation and
+deletion hold on volumes that can't take another byte (HFS+ and APFS both).
+
+```text not-run="the deletion guarantee in words"
+every old log removed first → fresh empty log → forgotten {files, bytes}
+             or → error forget_failed {what could not be deleted}
+```
+
+Deletion is refused while a turn is open (`notice` `invalid_transition`) — you can't delete the
+transcript of the turn you're inside.
+
+## Backups
+
+The data directory carries macOS's backup-exclusion attribute, so Time Machine and clone tools skip
+it — transcripts don't belong in an image shipped off-machine. If you copy the directory yourself,
+copy it whole (lock excluded): the per-file checksums catch any partial or torn copy at next open,
+which quarantines torn tails rather than replaying them.

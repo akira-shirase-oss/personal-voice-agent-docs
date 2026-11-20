@@ -1,0 +1,46 @@
+---
+title: Reliability and recovery
+description: Crashes, restarts, torn writes and stalls — how the service recovers and what it reports.
+---
+
+The service assumes it will be killed mid-anything and designs every write for it.
+
+## Crash recovery at open
+
+On start the service scans `ledger/`, verifies checksums, and reports what it found in `ready`'s
+`recovered`: `sessions`, `abandoned_turns` (open when the process died), `uncertain_calls` (sent to
+a provider, outcome unknown), `torn_tails` (partial writes cut off and quarantined). A torn tail is
+never replayed; uncertain calls reconcile as evidence arrives.
+
+```sh run=session
+pva_start "$PVA_WORK/data-dir"
+pva_send '{"type":"hello","protocol":1,"client":"docs"}'
+pva_expect
+pva_stop
+```
+
+```json output=session
+{"type":"ready","protocol":1,"session":"01a1f9a8-b08f-741f-b968-bc870cdb3cb9","consent":{"capture":false,"personal_voice":false},"recovered":{"sessions":0,"abandoned_turns":0,"uncertain_calls":0,"torn_tails":0}}
+```
+
+## Liveness and supervision
+
+The app pings the service (`ping` → `pong`, never touching the ledger) and watches for a stall:
+a service that stops answering — between turns, before `ready`, mid-turn — is noticed, not left
+"starting" forever. On quit the app sends `shutdown`, then SIGTERM at 1 s and SIGKILL at 0.5 s
+later, and doesn't quit until the service has exited. A crash storm (50 failed launches in the
+suite) stays bounded.
+
+## Durability
+
+Records are appended through a dedicated writer thread, group-committed and fsynced; `flush` is the
+honest barrier — `flushed seq` means everything before `seq` is durable. Mode repairs at open are
+synced the same way: directories through the directory, files through the file.
+
+## Load evidence
+
+The million-scale runs are committed under `perf/results/` in the product repository with the
+machine spec, commit and load average: 1,000,000 durable ledger appends (p99 7.72 ms against a
+50 ms budget) and a 1,000,000-event turn run with scripted interruptions and stalls (reply p99
+0.41 ms, every expected late result dropped, zero unexpected degradations) on quiet Linux CI —
+macOS evidence is labelled separately, and laptop numbers are development observations only.

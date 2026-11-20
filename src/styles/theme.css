@@ -1,0 +1,166 @@
+/*
+ * Personal Voice Agent Docs theme: deliberately neutral. Starlight's own tokens do the work — a shared
+ * design system is coming, so nothing here picks a product palette; the few component variables the
+ * changelog cards need are derived from Starlight's tokens so both themes stay consistent.
+ */
+
+:root {
+	--sl-content-width: 46rem;
+
+	/* Changelog cards (src/pages/changelog): a surface a step off the page, lighter when open. */
+	--card-bg: var(--sl-color-gray-6);
+	--card-bg-hover: color-mix(in srgb, var(--sl-color-gray-6) 80%, var(--sl-color-accent-low));
+	--card-bg-open: color-mix(in srgb, var(--sl-color-gray-6) 55%, var(--sl-color-accent-low));
+	--card-sheen: color-mix(in srgb, var(--sl-color-white) 4%, transparent);
+	--card-border-open: color-mix(in srgb, var(--sl-color-accent-low) 60%, var(--sl-color-hairline));
+	--card-muted: var(--sl-color-gray-3);
+	--chip-bg: color-mix(in srgb, var(--sl-color-gray-6) 70%, var(--sl-color-gray-5));
+	--card-attention: color-mix(in srgb, var(--sl-color-orange, #b7791f) 8%, transparent);
+	/* Status accents for chips and icons: Starlight's aside hues, not a product colour. The
+	   -high variants are the theme-aware text tones (≥4.5:1 on the chip surface in both themes;
+	   the mid tones fail on a light chip). */
+	--c-live: var(--sl-color-green-high, var(--sl-color-green, #3a7d5d));
+	--c-warn: var(--sl-color-orange-high, #b7791f);
+}
+
+body {
+	background: var(--sl-color-black);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+.site-title {
+	color: var(--sl-color-white);
+	font-weight: 600;
+	font-size: 1.0625rem;
+	gap: 0.5rem;
+}
+
+/* Links read as links: underlined, in the accent. */
+.sl-markdown-content a:not(:where(.not-content *, .card-link, .sl-link-card, [class*='sl-link'], .change-anchor)) {
+	color: var(--sl-color-accent-high);
+	text-decoration: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.2em;
+	text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.sl-markdown-content a:not(:where(.not-content *, .change-anchor)):hover {
+	text-decoration-color: currentColor;
+}
+
+/* Inline code: a quiet chip */
+.sl-markdown-content :not(pre) > code {
+	background: var(--sl-color-gray-6);
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.3rem;
+	padding: 0.05em 0.3em;
+	font-size: 0.875em;
+	overflow-wrap: anywhere;
+}
+
+/* Tables stay inside the column on a phone */
+.sl-markdown-content table {
+	display: block;
+	overflow-x: auto;
+	font-size: var(--sl-text-sm);
+}
+.sl-markdown-content th {
+	white-space: nowrap;
+}
+
+/* Focus is always visible */
+:focus-visible {
+	outline: 2px solid var(--sl-color-accent);
+	outline-offset: 2px;
+}
+/* A code block takes focus so it can be scrolled from the keyboard (src/lib/focusable-code.mjs). */
+.expressive-code pre:focus-visible {
+	outline: 2px solid var(--sl-color-accent);
+	outline-offset: -2px;
+}
+
+/* The sidebar's current page: a thin rule instead of a filled block */
+nav.sidebar a[aria-current='page'] {
+	background: var(--sl-color-accent-low);
+	color: var(--sl-color-accent-high);
+	font-weight: 600;
+}
+:root[data-theme='light'] nav.sidebar a[aria-current='page'] {
+	color: var(--sl-color-accent-high);
+}
+
+/* Numbered parts in the quick start */
+.sl-markdown-content .part {
+	display: inline-block;
+	font-size: var(--sl-text-xs);
+	font-weight: 600;
+	color: var(--sl-color-gray-3);
+	margin-bottom: -0.5rem;
+}
+
+/* Screenshots: framed, never wider than the column */
+.sl-markdown-content figure.shot {
+	margin-block: 1.25rem;
+}
+.sl-markdown-content figure.shot img {
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.5rem;
+	width: 100%;
+	height: auto;
+}
+.sl-markdown-content figure.shot figcaption {
+	font-size: var(--sl-text-xs);
+	color: var(--sl-color-gray-3);
+	margin-top: 0.5rem;
+}
+
+/* Read-only checklists: a marked list, not disabled checkboxes (src/lib/readable-checklists.mjs) */
+.sl-markdown-content .contains-task-list {
+	list-style: none;
+	padding-inline-start: 0.25rem;
+}
+.sl-markdown-content .task-mark {
+	display: inline-block;
+	width: 1.1em;
+	text-align: center;
+	margin-inline-end: 0.35em;
+	color: var(--sl-color-gray-3);
+}
+.sl-markdown-content .task-mark.task-done {
+	color: var(--sl-color-gray-2);
+}
+
+/* Collapsible responses */
+.sl-markdown-content details {
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.5rem;
+	padding: 0.5rem 0.875rem;
+	margin-block: 1rem;
+}
+.sl-markdown-content details > summary {
+	cursor: pointer;
+	font-weight: 500;
+	color: var(--sl-color-gray-2);
+}
+.sl-markdown-content details[open] > summary {
+	margin-bottom: 0.75rem;
+}
+
+/* Status chips used in tables: Built / Planned */
+.chip {
+	display: inline-block;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	padding: 0.05rem 0.45rem;
+	border-radius: 999px;
+	border: 1px solid var(--sl-color-hairline);
+	color: var(--sl-color-gray-2);
+	white-space: nowrap;
+}
+
+@media (max-width: 30rem) {
+	:root {
+		--sl-text-h1: 1.875rem;
+		--sl-text-h2: 1.375rem;
+	}
+}

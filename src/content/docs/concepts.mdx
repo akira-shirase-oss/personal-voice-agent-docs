@@ -1,0 +1,57 @@
+---
+title: Concepts
+description: The model behind Personal Voice Agent — turns, heard vs inferred vs executed, consent, and fail-closed.
+---
+
+## Two processes, one boundary
+
+The **app** owns everything Apple: the microphone, the recognizer, the on-device model, the voice.
+The **service** (`voice-session`, a Rust child over stdin/stdout JSON lines) owns everything that
+decides: consent, deadlines, the ledger, and whether anything is spoken or executed. Audio never
+crosses the boundary and is never written to disk.
+
+```text not-run="a diagram of the process boundary, not a command"
+mic → app (Speech / FoundationModels / AVSpeechSynthesizer)
+        ↑ JSON lines: requests down, answers up
+      voice-session (consent · deadlines · ledger · decisions)
+```
+
+## Heard ≠ inferred ≠ executed
+
+The ledger keeps three kinds of truth apart:
+
+- **heard** — the transcript the recognizer produced. The model receives it as *data*, never as
+  instructions; a sentence you spoke can't command the service.
+- **inferred** — the model's proposal: a reply, or a named action with slots.
+- **executed** — what actually ran, recorded only when evidence exists. A spoken "done" needs a
+  tool result; the completion-claim guard keeps model text from claiming one.
+
+Confirmations check the action's slots **against the preserved heard transcript** — a value that
+wasn't heard is a `slot_not_heard` confirmation reason, not a guess.
+
+## Consent is a file, not a flag
+
+Capture consent lives on disk (`<data-dir>/consent.capture.granted`), so a service that never reads
+your message still starts revoked. While consent is off the app sends no `ptt_down` and opens no
+microphone; if a `ready` or `consent_state` ever disagrees, the revocation is sent again.
+[Consent and permissions](/consent-and-permissions/) covers the full lifecycle.
+
+## Fail closed
+
+Every boundary errs toward refusing: provider deadlines are always enforced; a stalled stage turns
+`degraded` rather than inventing a result; an ambiguous proposal is confirmed or refused; a store
+file that isn't a regular, owner-only file — or is a symlink — is refused rather than followed.
+
+## Which message, when
+
+| You want to… | App → service | Service answers |
+|---|---|---|
+| Open a turn | `ptt_down` | `turn_opened`, `capture` on |
+| Deliver what was heard | `stt_final` | `lm_request` (heard verbatim) |
+| Deliver the proposal | `lm_done` | `tts_request`s or `confirm_request` |
+| Stop everything now | `interrupt` | `cancel`s, `stop_playback`, `turn_closed` |
+| Prove durability | `flush` | `flushed` once all earlier records are durable |
+| Forget a scope | `forget` | `forgotten`, or `error` `forget_failed` |
+
+The [protocol reference](/api/reference/) lists every field, and [a turn, end to end](/a-turns-life/)
+walks one including an interruption.

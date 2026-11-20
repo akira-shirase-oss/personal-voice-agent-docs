@@ -1,0 +1,33 @@
+{
+  "name": "personal-voice-agent-docs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Documentation for Personal Voice Agent, the private on-device voice interface for macOS: guides, the session protocol reference and the changelog.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.17"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "node scripts/check-urls.mjs && astro build && node scripts/focusable-tables.mjs && node scripts/csp-hashes.mjs && node scripts/check-dist.mjs && node --test scripts/a11y-build.test.mjs",
+    "preview": "astro preview",
+    "protocol": "node scripts/gen-protocol.mjs",
+    "check:protocol": "node scripts/check-protocol.mjs",
+    "snippets": "node scripts/snippets.mjs",
+    "test": "node --test scripts/*.test.mjs",
+    "hooks": "git config core.hooksPath scripts/hooks"
+  },
+  "dependencies": {
+    "@astrojs/rss": "4.0.19",
+    "@astrojs/starlight": "0.42.8",
+    "astro": "^7.4.13",
+    "sharp": "0.35.5",
+    "starlight-links-validator": "0.27.0",
+    "starlight-llms-txt": "0.12.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "axe-core": "4.14.1"
+  }
+}

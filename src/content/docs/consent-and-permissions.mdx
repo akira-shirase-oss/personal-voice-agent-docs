@@ -1,0 +1,84 @@
+---
+title: Consent and permissions
+description: How consent works in Personal Voice Agent — the token files, what revocation guarantees, and the macOS permission prompts.
+---
+
+Personal Voice Agent's "authentication" is consent: nothing is captured, inferred or acted on until
+you say so, and the record of that choice lives on disk where the service — not the UI — reads it.
+
+## The two scopes
+
+| Scope | What it allows | State in the first release |
+|---|---|---|
+| `capture` | The app may open the microphone while you hold push-to-talk | Live |
+| `personal_voice` | Synthesis in a personal (your own) voice — needs a usage-rights review hash | **Closed**: always off |
+
+## Consent lives on disk
+
+Granting writes `<data-dir>/consent.capture.granted` — a small owner-only (`0600`) regular file —
+and records the grant in `consent.log`. At open the service reads the **file**, not a memory:
+
+- only a regular file with owner read+write grants (a directory, or `0400`, or `0000`, doesn't);
+- a **symlink is never followed** — the open that would read through it fails closed;
+- `0000` is the tombstone: a revocation a service never read is still a revocation on restart.
+
+{/* snippet session: snippets/session.sh */}
+
+```sh run=session
+pva_start "$PVA_WORK/data-consent"
+pva_send '{"type":"hello","protocol":1,"client":"docs"}'
+pva_expect
+pva_send '{"type":"consent","scope":"capture","grant":true,"rights_review":null}'
+pva_expect
+ls "$PVA_WORK/data-consent"
+```
+
+```text output=session match=lines
+{"type":"ready","protocol":1,"session":"01a1f9a8-ad6f-7456-8744-51fe63c96317","consent":{"capture":true,"personal_voice":false},"recovered":{"sessions":0,"abandoned_turns":0,"uncertain_calls":0,"torn_tails":0}}
+{"type":"consent_state","capture":true,"personal_voice":false}
+consent.capture.granted
+consent.log
+ledger
+lock
+```
+
+## What revocation guarantees
+
+Revoking deletes the token **before** the message can matter — the app unlinks it (or, if unlink
+fails, sets the file to `0000` itself rather than through any link) so a service that never reads
+your `consent` message starts up revoked anyway. Then, while the choice is "off":
+
+- the app sends no `ptt_down` and opens no microphone;
+- a `ready` or `consent_state` claiming capture is granted is answered with the revocation again;
+- a token that somehow reappears `0400` can't grant — the service reads only owner read+write.
+
+Deletion follows consent's scope honestly: `forget` with `scope: "capture"` removes every heard
+transcript (every log is deleted before the fresh one is created, needing no free space) and is
+answered by `forgotten` — or `error` `forget_failed` if anything could not be deleted, never a
+quiet miss. These guarantees are exercised against genuinely full filesystems in the product's
+tests, on both HFS+ and APFS volumes.
+
+## The macOS prompts
+
+Two permission dialogs are macOS's own, and the app can't grant them for you (or for any agent):
+
+- **Microphone** — required for capture; without it push-to-talk does nothing.
+- **Speech recognition** — required to turn audio into the heard transcript.
+
+The app also never bypasses authentication with voice imitation, and the personal-voice scope
+staying closed in the first release is deliberate: a voice that could be mistaken for yours needs
+its own review, not a checkbox.
+
+```sh run=session
+pva_send '{"type":"consent","scope":"personal_voice","grant":true,"rights_review":"sha256:docs"}'
+pva_expect
+pva_stop
+```
+
+```json output=session
+{"type":"notice","code":"rights_review_required","turn":null}
+```
+
+The grant is refused outright: the scope is closed in the first release, so even a well-formed
+request answers with a `notice`, not a state change. (The `ls` above also shows
+`consent.capture.granted` on disk — created by the live scope's grant, owner-only.)
