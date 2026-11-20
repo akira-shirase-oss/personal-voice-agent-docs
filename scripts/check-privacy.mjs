@@ -5,8 +5,10 @@
 //   - leaves the machine for a third party on any page (fonts, CDNs, analytics, telemetry,
 //     images from other hosts). These docs describe a local app; first-party only, no exceptions —
 //     there is no hosted API to try and nothing may call out.
-//   - persists anything in storage: the docs keep nothing in the reader's browser. Starlight's own
-//     theme key is the only entry allowed (it is the theme toggle, not data).
+//   - persists anything that is not Starlight's own chrome state: the docs keep no reader data in
+//     the browser. The only entries allowed are the two keys Starlight itself writes —
+//     `starlight-theme` (the theme toggle) and `sl-sidebar-state` (which sidebar groups are
+//     open) — both UI chrome, not data; anything else fails.
 //   - sets a credential-named cookie or opens an IndexedDB database.
 //
 // It also runs the accessibility scan (scripts/axe-scan.mjs) on the pages it visits — the same
@@ -85,15 +87,17 @@ for (const path of pages) {
 	if (violations.length) axeBad.push({ path, violations });
 }
 
-// Storage on the last page read whole: the theme key Starlight owns is fine; nothing else may
-// persist — no tokens, no server, no identity, because there is nothing to remember.
+// Storage on the last page read whole: the two keys Starlight itself owns are fine (theme choice,
+// which sidebar groups are open — chrome state, not reader data); nothing else may persist — no
+// tokens, no server, no identity, because there is nothing to remember.
+const STARLIGHT_KEYS = new Set(['starlight-theme', 'sl-sidebar-state']);
 const storage = await page.evaluate(() => {
 	const read = (area) => Object.fromEntries(Array.from({ length: area.length }, (_, i) => area.key(i)).map((name) => [name, area.getItem(name)]));
 	return { localStorage: read(localStorage), sessionStorage: read(sessionStorage) };
 });
 for (const [area, entries] of Object.entries(storage)) {
 	for (const name of Object.keys(entries)) {
-		if (name !== 'starlight-theme') fail(`${area} stores ${name} — the docs keep nothing in the browser`);
+		if (!STARLIGHT_KEYS.has(name)) fail(`${area} stores ${name} — the docs keep no reader data in the browser`);
 	}
 }
 const cookies = await context.cookies();
