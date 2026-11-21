@@ -9,8 +9,11 @@ export const ALLOWED_STORAGE = {
 		area: 'localStorage',
 		shape: (v) => v === '' || v === 'light' || v === 'dark',
 	},
-	// Which sidebar groups are open: {i: "<group hash>", open: {<hash>: bool}, scroll: <px>},
-	// and only in sessionStorage — it dies with the tab.
+	// Which sidebar groups are open: {hash: "<id>", open: [bool, …], scroll: <px>} —
+	// hash is a short base-36 group id, open a bounded list of booleans (one per
+	// sidebar group; the cap is far past this site's group count), scroll a
+	// finite non-negative pixel position. Only in sessionStorage — it dies with
+	// the tab. Anything else in the object is not Starlight's shape.
 	'sl-sidebar-state': {
 		area: 'sessionStorage',
 		shape: (v) => {
@@ -19,11 +22,15 @@ export const ALLOWED_STORAGE = {
 				return (
 					s !== null &&
 					typeof s === 'object' &&
-					typeof s.i === 'string' &&
-					s.open !== null &&
-					typeof s.open === 'object' &&
-					Object.values(s.open).every((b) => typeof b === 'boolean') &&
-					typeof s.scroll === 'number'
+					Object.keys(s).sort().join(',') === 'hash,open,scroll' &&
+					typeof s.hash === 'string' &&
+					s.hash.length <= 16 &&
+					/^[0-9a-z]+$/.test(s.hash) &&
+					Array.isArray(s.open) &&
+					s.open.length <= 64 &&
+					s.open.every((b) => typeof b === 'boolean') &&
+					Number.isFinite(s.scroll) &&
+					s.scroll >= 0
 				);
 			} catch {
 				return false;

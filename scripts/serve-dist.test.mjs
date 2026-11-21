@@ -87,13 +87,29 @@ test('the theme key only lives in localStorage as light, dark or empty', () => {
 });
 
 test('the sidebar key only lives in sessionStorage as Starlight\'s state object', () => {
-	const good = JSON.stringify({ i: '07funsf', open: { '07funsf': true, abc: false }, scroll: 213 });
+	// The shape Starlight actually writes, observed in the crawl: a base-36 group
+	// id, a bounded list of booleans, a scroll offset — and nothing else.
+	const good = JSON.stringify({ hash: '07funsf', open: [true], scroll: 0 });
 	assert.equal(storageVerdict('sessionStorage', 'sl-sidebar-state', good), null);
+	assert.equal(
+		storageVerdict('sessionStorage', 'sl-sidebar-state', JSON.stringify({ hash: 'a', open: [], scroll: 12.5 })),
+		null,
+		'an empty open list and a fractional scroll are still the shape',
+	);
 	assert.ok(storageVerdict('localStorage', 'sl-sidebar-state', good), 'wrong area — it must die with the tab');
 	assert.ok(storageVerdict('sessionStorage', 'sl-sidebar-state', 'true'), 'not JSON');
-	assert.ok(storageVerdict('sessionStorage', 'sl-sidebar-state', '{"i":"x","open":"all","scroll":0}'), 'open must be a map of booleans');
-	assert.ok(storageVerdict('sessionStorage', 'sl-sidebar-state', '{"i":"x","open":{},"scroll":"0"}'), 'scroll must be a number');
-	assert.ok(storageVerdict('sessionStorage', 'sl-sidebar-state', '{"i":"x","open":{}}'), 'missing scroll');
+	for (const [what, bad] of [
+		['an extra key', { hash: '07funsf', open: [true], scroll: 0, x: 1 }],
+		['a string inside open', { hash: '07funsf', open: [true, 'yes'], scroll: 0 }],
+		['a long hash', { hash: 'z'.repeat(17), open: [true], scroll: 0 }],
+		['a non-base-36 hash', { hash: 'UPPER!', open: [true], scroll: 0 }],
+		['a negative scroll', { hash: '07funsf', open: [true], scroll: -1 }],
+		['a scroll that is a string', { hash: '07funsf', open: [true], scroll: '0' }],
+		['open as an object', { hash: '07funsf', open: { '07funsf': true }, scroll: 0 }],
+		['more open slots than the cap', { hash: '07funsf', open: Array(65).fill(false), scroll: 0 }],
+	]) {
+		assert.ok(storageVerdict('sessionStorage', 'sl-sidebar-state', JSON.stringify(bad)), `${what} is refused`);
+	}
 });
 
 test('any other key fails wherever it is found', () => {

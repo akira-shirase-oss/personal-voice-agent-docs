@@ -9,7 +9,7 @@
 //   - persists anything that is not Starlight's own chrome state: the docs keep no reader data
 //     in the browser. Each allowed key is pinned to its storage area and to the value shape
 //     Starlight writes — `starlight-theme` only in localStorage, only "light"/"dark"/""; and
-//     `sl-sidebar-state` only in sessionStorage, only its {hash, open map, scroll} JSON.
+//     `sl-sidebar-state` only in sessionStorage, only its {hash, open array, scroll} JSON.
 //   - sets a credential-named cookie, opens an IndexedDB database, or registers a service
 //     worker.
 //   - is served without the real security headers: the site is served by scripts/serve-dist.mjs,
