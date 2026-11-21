@@ -19,12 +19,12 @@
 //   node scripts/snippets.mjs --list                print the steps without running them
 //   node scripts/snippets.mjs --coverage            count every code block: run, a checked output,
 //                                                   or `not-run="reason"`; fails on any other block
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const ROOT = resolve(new URL('..', import.meta.url).pathname);
+export const ROOT = resolve(new URL('..', import.meta.url).pathname);
 const DOCS = join(ROOT, 'src/content/docs');
 const SUITES = ['session'];
 
@@ -122,12 +122,149 @@ function bySuiteHas(steps, suite) {
 	return steps.some((step) => step.suite === suite && step.kind === 'run');
 }
 
-function runAll(steps) {
+// A step gets PVA_STEP_TIMEOUT seconds (default 300 — the first pva_start may
+// build the service from source), then the watchdog fires SIGALRM at the
+// driver. The trap writes <i>.timeout naming the step and `kill -9 0`s the
+// whole process group: the step's own children — a sleeper, a drain, a
+// voice-session that never got its shutdown — die with it. The driver must
+// run as its own group leader; runDriver spawns it detached.
+export function driverLines(suite, suiteSteps, dir, { stepTimeout = 300 } = {}) {
+	const lines = [
+		'set -uo pipefail',
+		'shopt -s expand_aliases',
+		`cd ${JSON.stringify(workdir)}`,
+		`export PVA_WORK=${JSON.stringify(workdir)}`,
+		`trap 'echo "$PVA_STEP_I" > "$PVA_STEP_MARK" 2>/dev/null; kill -9 0' ALRM`,
+	];
+	for (const [i, step] of suiteSteps) {
+		// The watchdog is push-based: the sleep's own exit runs `kill -ALRM`, so
+		// the bound fires even when the driver is blocked inside a builtin (a
+		// fifo open in pva_send) where a reaping-based poll would stay blind to
+		// an expired sleep. The subshell writes the sleep's pid to a file the
+		// driver reads at step end: kill the subshell AND its sleep by name.
+		// A TERM landing before the pid reaches the file leaves an inert orphan
+		// that can only sleep-then-die — bounded by the bound, group-killable.
+		lines.push(
+			`export PVA_STEP_I=${i} PVA_STEP_MARK=${JSON.stringify(join(dir, `${i}.timeout`))} PVA_WATCHPID=${JSON.stringify(join(dir, `${i}.watchpid`))}`,
+			`( sleep ${stepTimeout} & echo "$!" > "$PVA_WATCHPID"; wait; kill -ALRM $$ ) >/dev/null 2>&1 & step_watch=$!`,
+		);
+		if (step.kind === 'script') {
+			lines.push(`. ${JSON.stringify(join(ROOT, step.path))} ${step.args}`);
+		} else {
+			const stepFile = join(dir, `${i}.sh`);
+			writeFileSync(stepFile, step.code + '\n');
+			lines.push(`. ${JSON.stringify(stepFile)} > ${JSON.stringify(join(dir, `${i}.out`))} 2> ${JSON.stringify(join(dir, `${i}.err`))}; echo $? > ${JSON.stringify(join(dir, `${i}.status`))}`);
+		}
+		// Subshell first (it can only fire once), then its sleep by recorded
+		// pid. The file appears a beat after spawn — wait it out briefly.
+		lines.push(
+			'kill "$step_watch" 2>/dev/null',
+			'for _ in 1 2 3 4 5 6 7 8 9 10; do p=$(cat "$PVA_WATCHPID" 2>/dev/null || echo 0); case "$p" in ""|0|*[!0-9]*) sleep 0.02 ;; *) kill "$p" 2>/dev/null; break ;; esac; done',
+			'wait "$step_watch" 2>/dev/null',
+		);
+	}
+	// Anything a step left running is a direct job of this shell: TERM it, then
+	// KILL, then reap. Otherwise the children keep the driver's pipes open past
+	// exit and the runner hangs on them — the failure this bound exists for.
+	lines.push(
+		'kill $(jobs -p) 2>/dev/null || true',
+		'wait 2>/dev/null || true',
+		'kill -9 $(jobs -p) 2>/dev/null || true',
+		'wait 2>/dev/null || true',
+	);
+	return lines;
+}
+
+// The suite driver detached in its own process group, bounded: on the suite
+// timeout the GROUP is killed, never just bash — a step's orphaned children
+// cannot keep the output pipes open or outlive the runner (the failure that
+// left a voice-session running for 14 h). timedOut distinguishes the bound
+// firing from the driver dying on its own.
+export function runDriver(path, timeoutMs) {
+	return new Promise((resolvePromise) => {
+		const child = spawn('bash', [path], { detached: true });
+		let stdout = '';
+		let stderr = '';
+		let timedOut = false;
+		child.stdout.on('data', (chunk) => (stdout += chunk));
+		child.stderr.on('data', (chunk) => (stderr += chunk));
+		const timer = setTimeout(() => {
+			timedOut = true;
+			try {
+				process.kill(-child.pid, 'SIGKILL');
+			} catch {
+				// The group is already gone.
+			}
+		}, timeoutMs);
+		child.on('error', (error) => {
+			clearTimeout(timer);
+			resolvePromise({ status: null, signal: null, timedOut, stdout, stderr, error, pid: child.pid });
+		});
+		child.on('close', (status, signal) => {
+			clearTimeout(timer);
+			resolvePromise({ status, signal, timedOut, stdout, stderr, pid: child.pid });
+		});
+	});
+}
+
+// An env-provided bound: a finite number of at least 1, else the default.
+// `sleep ${NaN}` would exit instantly and fire a false timeout on step 0.
+function bound(value, fallback) {
+	const n = Number(value ?? fallback);
+	return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
+
+// Every <i>.timeout marker the driver left behind for THIS suite's steps,
+// translated into one line per step that hung — the file and the step number.
+// The marker dir is shared, so a later suite must not re-report earlier ones.
+export function timeoutReports(dir, suiteSteps) {
+	const mine = new Set(suiteSteps.map(([index]) => index));
+	const tail = (path, lines) => {
+		try {
+			return readFileSync(path, 'utf8').trimEnd().split('\n').filter(Boolean).slice(-lines);
+		} catch {
+			return [];
+		}
+	};
+	return readdirSync(dir)
+		.filter((name) => name.endsWith('.timeout'))
+		.map((name) => Number(name.slice(0, -'.timeout'.length)))
+		.filter((i) => mine.has(i))
+		.sort((a, b) => a - b)
+		.map((i) => {
+			const found = suiteSteps.find(([index]) => index === i);
+			const where = found ? relative(ROOT, found[1].file) : 'unknown file';
+			// A blocked step often writes nothing before dying — the step's own
+			// stderr and the service's are the only witnesses to its cause.
+			const stepErr = tail(join(dir, `${i}.err`), 5);
+			const serviceErr = found?.[1].suite === 'session' ? tail(join(workdir, 'session', 'err'), 5) : [];
+			const detail = [
+				...stepErr.map((line) => `    step stderr: ${line}`),
+				...serviceErr.map((line) => `    service stderr: ${line}`),
+			];
+			return `snippets: ${where} — step ${i} timed out; it and its process group were killed`
+				+ (detail.length ? `\n${detail.join('\n')}` : '');
+		});
+}
+
+async function runAll(steps) {
 	const dir = join(ROOT, '.snippets', 'run');
 	rmSync(dir, { recursive: true, force: true });
 	mkdirSync(dir, { recursive: true });
 	mkdirSync(workdir, { recursive: true });
 	// The session suite needs a real voice-session: fail up front, not mid-driver on stale output.
+	if (bySuiteHas(steps, 'session')) {
+		// The driver runs from $PVA_WORK, not the repo — a relative PVA_DIR or
+		// PVA_BIN resolves there, not here. Resolve both against the repo root
+		// now, or pva_build's cargo can't find the checkout and the service
+		// never spawns (CI's step-1 hang: pva_send then blocks on the fifo).
+		if (process.env.PVA_BIN) {
+			process.env.PVA_BIN = resolve(ROOT, process.env.PVA_BIN);
+		}
+		if (process.env.PVA_DIR) {
+			process.env.PVA_DIR = resolve(ROOT, process.env.PVA_DIR);
+		}
+	}
 	if (bySuiteHas(steps, 'session') && !process.env.PVA_BIN) {
 		const pvaDir = process.env.PVA_DIR ?? join(ROOT, '..', 'personal-voice-agent');
 		if (!existsSync(join(pvaDir, 'Cargo.toml'))) {
@@ -148,21 +285,21 @@ function runAll(steps) {
 	for (const suite of SUITES) {
 		const suiteSteps = bySuite.get(suite);
 		if (!suiteSteps || (only && suite !== only)) continue;
-		const lines = ['set -uo pipefail', 'shopt -s expand_aliases', `cd ${JSON.stringify(workdir)}`, `export PVA_WORK=${JSON.stringify(workdir)}`];
-		for (const [i, step] of suiteSteps) {
-			if (step.kind === 'script') {
-				lines.push(`. ${JSON.stringify(join(ROOT, step.path))} ${step.args}`);
-			} else {
-				const stepFile = join(dir, `${i}.sh`);
-				writeFileSync(stepFile, step.code + '\n');
-				lines.push(`. ${JSON.stringify(stepFile)} > ${JSON.stringify(join(dir, `${i}.out`))} 2> ${JSON.stringify(join(dir, `${i}.err`))}; echo $? > ${JSON.stringify(join(dir, `${i}.status`))}`);
-			}
+		const stepTimeout = bound(process.env.PVA_STEP_TIMEOUT, 300);
+		const suiteTimeout = bound(process.env.PVA_SUITE_TIMEOUT_MS, 1_500_000);
+		const driver = join(dir, `suite-${suite}.sh`);
+		writeFileSync(driver, driverLines(suite, suiteSteps, dir, { stepTimeout }).join('\n') + '\n');
+		const result = await runDriver(driver, suiteTimeout);
+		const reports = timeoutReports(dir, suiteSteps);
+		for (const report of reports) {
+			console.error(report);
+			failed++;
 		}
-			const driver = join(dir, `suite-${suite}.sh`);
-		writeFileSync(driver, lines.join('\n') + '\n');
-		const result = spawnSync('bash', [driver], { encoding: 'utf8', timeout: 1_800_000 });
-		if (result.error || result.status !== 0) {
-			console.error(`snippets: the "${suite}" session died (${result.error ?? result.status}): ${(result.stderr ?? '').slice(-200)}`);
+		if (result.timedOut) {
+			console.error(`snippets: the "${suite}" suite ran past its ${Math.round(suiteTimeout / 60_000)} min bound — its whole process group was killed`);
+			failed++;
+		} else if (reports.length === 0 && (result.error || result.signal || result.status !== 0)) {
+			console.error(`snippets: the "${suite}" session died (${result.error ?? result.signal ?? result.status}): ${(result.stderr ?? '').slice(-200)}`);
 			failed++;
 		}
 		for (const [i, step] of suiteSteps) {
@@ -170,6 +307,9 @@ function runAll(steps) {
 			const outFile = join(dir, `${i}.out`);
 			const statusFile = join(dir, `${i}.status`);
 			if (!existsSync(statusFile)) {
+				// A step with a .timeout marker was already reported by name —
+				// it ran and hung, so "never ran" is the wrong number for it.
+				if (existsSync(join(dir, `${i}.timeout`))) continue;
 				console.error(`snippets: ${relative(ROOT, step.file)} — step ${i} never ran (the session died first)`);
 				failed++;
 				continue;
@@ -244,14 +384,14 @@ function coverage() {
 
 // ----------------------------------------------------------------
 
-export function main() {
+export async function main() {
 	const steps = readSteps();
 	if (flag('coverage')) process.exit(coverage());
 	if (flag('list')) {
 		for (const [i, step] of steps.entries()) console.log(`${i}\t${step.suite}\t${relative(ROOT, step.file)}\t${step.kind === 'script' ? step.path : step.code.split('\n')[0]}`);
 		process.exit(0);
 	}
-	const failed = runAll(steps);
+	const failed = await runAll(steps);
 	console.log(`snippets: ${failed === 0 ? 'every block ran and matched' : `${failed} failure(s)`}`);
 	process.exit(failed ? 1 : 0);
 }

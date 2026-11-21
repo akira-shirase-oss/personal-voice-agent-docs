@@ -53,7 +53,7 @@ pva_expect
 ```
 
 ```json output=session
-{"type":"ready","protocol":1,"session":"01a1f9a8-b1f9-71e1-9e1c-389523f1bd84","consent":{"capture":true,"personal_voice":false},"recovered":{"sessions":0,"abandoned_turns":0,"uncertain_calls":0,"torn_tails":0}}
+{"type":"ready","protocol":1,"session":"01a1f9a8-b1f9-71e1-9e1c-389523f1bd84","consent":{"capture":false,"personal_voice":false},"recovered":{"sessions":0,"abandoned_turns":0,"uncertain_calls":0,"torn_tails":0}}
 ```
 
 The session starts **revoked**: `consent.capture` is `false` until you grant it on disk.
