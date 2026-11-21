@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>known-bad privacy fixture</title>
+		<!-- failure 2: a preconnect hint pointing off-site (hint check) -->
+		<link rel="preconnect" href="https://third-party.example" />
+	</head>
+	<body>
+		<h1>known-bad privacy fixture</h1>
+		<!-- failure 1: a third-party image the route trace must catch -->
+		<img src="https://third-party.example/x.png" alt="" />
+		<!-- failure 3: the crawl presses this button; its handler writes a key
+		     that is not one of Starlight's two allowed ones, in the crawl tab's
+		     own sessionStorage — only readable where the interaction happened. -->
+		<div class="copy"><button type="button">copy</button></div>
+		<script src="/app.js"></script>
+	</body>
+</html>

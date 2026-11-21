@@ -31,21 +31,26 @@
 //
 //   node scripts/check-privacy.mjs                          build is served by a spawned static server
 //   node scripts/check-privacy.mjs --pages /,/api/reference/   just these pages
+//   node scripts/check-privacy.mjs --dist fixtures/bad-dist    crawl another tree (the bad fixture)
 //   PREVIEW=http://127.0.0.1:58668 node scripts/check-privacy.mjs   against a server already up
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import axeScan from './axe-scan.mjs';
 import { storageVerdict } from './lib/allowed-storage.mjs';
 import { spawnDistServer, verifyNonce } from './lib/preview-server.mjs';
 import { isCspRefusal } from './lib/csp-probe.mjs';
 import { privacyContextOptions, axeContextOptions } from './lib/browser-contexts.mjs';
+import { parseHeaders, headersFor } from './serve-dist.mjs';
 
 const sitemap = (await import('./lib/sitemap-pages.mjs')).default;
 
-const argPages = (() => {
-	const at = process.argv.indexOf('--pages');
-	return at === -1 ? null : process.argv[at + 1].split(',');
-})();
-const pages = argPages ?? sitemap();
+const argValue = (name) => {
+	const at = process.argv.indexOf(name);
+	return at === -1 ? null : process.argv[at + 1];
+};
+const pages = argValue('--pages')?.split(',') ?? sitemap();
+const distArg = argValue('--dist');
 
 let bad = 0;
 const fail = (what) => {
@@ -59,8 +64,13 @@ const fail = (what) => {
 // listener is never trusted: whatever else answers, it is not this run's spawn.
 let preview = null;
 let base = process.env.PREVIEW;
+// The headers this server should send, from the tree it serves — only knowable
+// when the check spawned it. A CSP's mere presence proves nothing; the served
+// value is compared with the shipped file's, path by path.
+let expectedRules = null;
 if (!base) {
-	const { proc, base: spawned, nonce } = spawnDistServer(new URL('./serve-dist.mjs', import.meta.url).pathname);
+	const dist = distArg ?? new URL('../dist', import.meta.url).pathname;
+	const { proc, base: spawned, nonce } = spawnDistServer(new URL('./serve-dist.mjs', import.meta.url).pathname, { dist });
 	base = await spawned;
 	if (!(await verifyNonce(base, nonce))) {
 		proc.kill();
@@ -68,6 +78,8 @@ if (!base) {
 		process.exit(1);
 	}
 	preview = proc;
+	const file = join(dist, '_headers');
+	expectedRules = existsSync(file) ? parseHeaders(readFileSync(file, 'utf8')) : [];
 }
 const own = new URL(base).host;
 const ok = (url) => {
@@ -123,6 +135,28 @@ const checkExternalLinks = async (page, path) => {
 	}
 };
 
+// Storage is read on the tab that did the interacting: sessionStorage is
+// per-tab, so a fresh page would see an empty area and miss what the crawl
+// wrote — the check must read where the writers wrote. Verdicts are deduped:
+// a bad key persists across pages of the same tab, and one report is enough.
+const storageReported = new Set();
+const checkStorage = async (tab, label) => {
+	const storage = await tab.evaluate(() => {
+		const read = (area) => Object.fromEntries(Array.from({ length: area.length }, (_, i) => area.key(i)).map((name) => [name, area.getItem(name)]));
+		return { localStorage: read(localStorage), sessionStorage: read(sessionStorage) };
+	});
+	for (const [area, entries] of Object.entries(storage)) {
+		for (const [name, value] of Object.entries(entries)) {
+			const verdict = storageVerdict(area, name, value);
+			const key = `${area}:${name}:${value}`;
+			if (verdict && !storageReported.has(key)) {
+				storageReported.add(key);
+				fail(`${label}: ${verdict}`);
+			}
+		}
+	}
+};
+
 // Interactions count as much as navigations: theme, sidebar groups and copy buttons are the
 // site's own writers, and anything they store lands in the storage read below.
 const interact = async (page) => {
@@ -162,10 +196,22 @@ for (const path of pages) {
 	// server sends, which for a deploy is the deployed set.
 	if (!headers['content-security-policy']) fail(`${path}: no Content-Security-Policy header — dist/_headers is not applied`);
 	if (headers['referrer-policy'] !== 'no-referrer') fail(`${path}: Referrer-Policy "${headers['referrer-policy'] ?? '(none)'}" — the docs send no-referrer`);
+	// When this run spawned the server, existence is not enough: the served
+	// headers must equal what the shipped _headers declares for this path —
+	// a mis-parse on either side would silently weaken the deployed policy.
+	if (expectedRules) {
+		const expected = headersFor(expectedRules, path);
+		for (const [name, value] of Object.entries(expected)) {
+			if (headers[name.toLowerCase()] !== value) {
+				fail(`${path}: ${name} served as "${headers[name.toLowerCase()] ?? '(absent)'}" — _headers declares "${value}"`);
+			}
+		}
+	}
 	await page.waitForTimeout(300);
 	await checkHints(page, path);
 	await checkExternalLinks(page, path);
 	await interact(page);
+	await checkStorage(page, path);
 	await axePage.goto(`${base}${path}`, { waitUntil: 'networkidle' });
 	const violations = await axeScan(axePage, { label: path });
 	if (violations.length) axeBad.push({ path, violations });
@@ -224,19 +270,10 @@ try {
 }
 if (!connectBlocked || requests.length !== seen) fail('CSP connect-src did not stop a cross-origin fetch');
 
-// Storage, read whole after every interaction: the two keys Starlight itself owns, each in its
-// own area and in the shape Starlight writes — nothing else may persist, and even they may not
-// turn into something that is not chrome state.
-const storage = await first.evaluate(() => {
-	const read = (area) => Object.fromEntries(Array.from({ length: area.length }, (_, i) => area.key(i)).map((name) => [name, area.getItem(name)]));
-	return { localStorage: read(localStorage), sessionStorage: read(sessionStorage) };
-});
-for (const [area, entries] of Object.entries(storage)) {
-	for (const [name, value] of Object.entries(entries)) {
-		const verdict = storageVerdict(area, name, value);
-		if (verdict) fail(verdict);
-	}
-}
+// The search tab's own storage too — sessionStorage is per-tab, so whatever the
+// search exercise wrote lives here, not on the crawl tab already read above.
+await checkStorage(first, 'search');
+
 const cookies = await context.cookies();
 if (cookies.length) fail('a cookie was set — the docs set none');
 if ((await first.evaluate(async () => (await indexedDB.databases?.())?.length ?? 0)) > 0) fail('an IndexedDB database exists — nothing may persist');

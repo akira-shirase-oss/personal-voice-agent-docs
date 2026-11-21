@@ -1,0 +1,7 @@
+# The known-bad fixture's headers: a CSP is present so the header checks pass,
+# but img-src is deliberately wide so the third-party <img> really fires and the
+# route trace can catch it. script-src stays 'self' via default-src, so /app.js
+# runs while injected inline scripts and the cross-origin probe stay blocked.
+/*
+  Content-Security-Policy: default-src 'self'; img-src https:
+  Referrer-Policy: no-referrer

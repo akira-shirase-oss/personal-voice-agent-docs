@@ -41,6 +41,31 @@ test('comments and blank lines carry no rule', () => {
 	assert.deepEqual(rules[0].headers, [['X-One', 'a']]);
 });
 
+test('a header name in two matching rules joins, never replaces', () => {
+	// Cloudflare unions the same header across matching rules with ", " —
+	// replacing would send a value the deploy never sends.
+	const rules = parseHeaders(`/*\n  X-One: a\n\n/page/\n  X-One: b\n`);
+	assert.equal(headersFor(rules, '/page/')['X-One'], 'a, b');
+	assert.equal(headersFor(rules, '/other/')['X-One'], 'a', 'the narrow rule does not leak');
+});
+
+test('a `!` header line detaches a header an earlier rule set', () => {
+	// Cloudflare detaches: `  ! Name` inside a rule removes that header for the
+	// paths the rule matches, however a wider rule set it.
+	const rules = parseHeaders(`/*\n  X-Frame-Options: DENY\n  X-One: a\n\n/embed/\n  ! X-Frame-Options\n`);
+	assert.equal(headersFor(rules, '/embed/')['X-Frame-Options'], undefined);
+	assert.equal(headersFor(rules, '/embed/')['X-One'], 'a', 'other headers still apply');
+	assert.equal(headersFor(rules, '/page/')['X-Frame-Options'], 'DENY', 'the detach stays inside its rule');
+});
+
+test('Cloudflare\u2019s _headers limits are enforced, not silently applied', () => {
+	// A file Cloudflare would reject must not be "applied" differently here:
+	// 100 rules at most, 2000 characters a line at most.
+	assert.throws(() => parseHeaders(`/*\n  X-One: ${'x'.repeat(2001)}\n`), /line/i);
+	const many = Array.from({ length: 101 }, (_, i) => `/p${i}\n  X-One: a`).join('\n');
+	assert.throws(() => parseHeaders(many), /100|rules/i);
+});
+
 test('the shipped _headers gives every path its CSP and markdown its type', () => {
 	const file = join(ROOT, 'dist', '_headers');
 	if (!existsSync(file)) return; // before the first build there is nothing to parse
@@ -87,6 +112,23 @@ test('a spawned serve-dist answers on its printed port with the run\'s nonce', a
 		const url = await base;
 		assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/, 'it prints the bound address, not the requested one');
 		assert.equal(await verifyNonce(url, nonce), true, 'the spawn echoes its own nonce');
+	} finally {
+		proc.kill();
+	}
+});
+
+test('the nonce marks every response, including the 404s of a clean checkout', async () => {
+	// On a clean checkout there is no dist/ yet: `/` is a 404, and that 404 is
+	// still the spawned server answering — its nonce must echo there or
+	// verifyNonce refuses the right server and the gate fails before a build.
+	const { proc, base, nonce } = spawnDistServer(SERVE_DIST, { dist: join(ROOT, 'fixtures', 'empty-dist') });
+	try {
+		const url = await base;
+		const response = await fetch(`${url}/missing-page`, { headers: { Connection: 'close' } });
+		await response.arrayBuffer();
+		assert.equal(response.status, 404);
+		assert.equal(response.headers.get('x-serve-dist-nonce'), nonce, 'a 404 carries the nonce too');
+		assert.equal(await verifyNonce(url, nonce), true, 'a dist-less spawn still verifies');
 	} finally {
 		proc.kill();
 	}
