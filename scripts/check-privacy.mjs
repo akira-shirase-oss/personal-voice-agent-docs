@@ -30,10 +30,11 @@
 //   node scripts/check-privacy.mjs                          build is served by a spawned static server
 //   node scripts/check-privacy.mjs --pages /,/api/reference/   just these pages
 //   PREVIEW=http://127.0.0.1:58668 node scripts/check-privacy.mjs   against a server already up
-import { spawn } from 'node:child_process';
 import { chromium } from '@playwright/test';
 import axeScan from './axe-scan.mjs';
 import { storageVerdict } from './lib/allowed-storage.mjs';
+import { spawnDistServer, verifyNonce } from './lib/preview-server.mjs';
+import { isCspRefusal } from './lib/csp-probe.mjs';
 
 const sitemap = (await import('./lib/sitemap-pages.mjs')).default;
 
@@ -50,24 +51,20 @@ const fail = (what) => {
 };
 
 // A server for dist/ to browse. With PREVIEW set the caller runs it (a live deploy sends its
-// own real headers); otherwise spawn scripts/serve-dist.mjs, which applies dist/_headers the
-// way Cloudflare does — astro preview does not send them.
+// own real headers); otherwise spawn scripts/serve-dist.mjs on a free port with a per-run
+// nonce — and verify the answering server echoes it before a page loads. A pre-existing
+// listener is never trusted: whatever else answers, it is not this run's spawn.
 let preview = null;
 let base = process.env.PREVIEW;
 if (!base) {
-	const port = 58_668;
-	base = `http://127.0.0.1:${port}`;
-	preview = spawn('node', [new URL('./serve-dist.mjs', import.meta.url).pathname, '--port', String(port)], { stdio: 'ignore' });
-	for (let i = 0; i < 100; i++) {
-		const up = await fetch(base).then((r) => r.ok).catch(() => false);
-		if (up) break;
-		if (i === 99) {
-			console.error('privacy: the dist server never came up');
-			preview.kill();
-			process.exit(1);
-		}
-		await new Promise((resolve) => setTimeout(resolve, 200));
+	const { proc, base: spawned, nonce } = spawnDistServer(new URL('./serve-dist.mjs', import.meta.url).pathname);
+	base = await spawned;
+	if (!(await verifyNonce(base, nonce))) {
+		proc.kill();
+		console.error(`privacy: no response echoes this run's nonce — refusing to browse ${base}`);
+		process.exit(1);
 	}
+	preview = proc;
 }
 const own = new URL(base).host;
 const ok = (url) => {
@@ -189,25 +186,38 @@ if (await searchButton.count()) {
 
 // CSP, probed in the browser rather than trusted from the header alone: an inline script the
 // page never shipped must not run (script-src allows only the hashed ones), and a fetch off
-// this origin must die in the renderer — if it reached the network the request log would show it.
-const ran = await first.evaluate(() => {
-	window.__privacyProbe = 0;
-	const s = document.createElement('script');
-	s.textContent = 'window.__privacyProbe = 1';
-	document.head.append(s);
-	return window.__privacyProbe;
-});
-if (ran !== 0) fail('CSP script-src did not stop an injected inline script');
+// this origin must die in the renderer — if it reached the network the request log would show
+// it. The refusal can arrive two ways — the probe's own verdict, or Playwright surfacing the
+// CSP violation as an evaluation error; both are the expected outcome, anything else is not.
+let scriptRan;
+try {
+	scriptRan = await first.evaluate(() => {
+		window.__privacyProbe = 0;
+		const s = document.createElement('script');
+		s.textContent = 'window.__privacyProbe = 1';
+		document.head.append(s);
+		return window.__privacyProbe;
+	});
+} catch (err) {
+	scriptRan = isCspRefusal(err) ? 0 : 1;
+}
+if (scriptRan !== 0) fail('CSP script-src did not stop an injected inline script');
 const seen = requests.length;
-const leaked = await first.evaluate(async () => {
-	try {
-		await fetch('https://privacy.invalid/probe', { mode: 'no-cors' });
-		return true;
-	} catch {
-		return false;
-	}
-});
-if (leaked || requests.length !== seen) fail('CSP connect-src did not stop a cross-origin fetch');
+let connectBlocked;
+try {
+	const leaked = await first.evaluate(async () => {
+		try {
+			await fetch('https://privacy.invalid/probe', { mode: 'no-cors' });
+			return true;
+		} catch {
+			return false;
+		}
+	});
+	connectBlocked = !leaked;
+} catch (err) {
+	connectBlocked = isCspRefusal(err);
+}
+if (!connectBlocked || requests.length !== seen) fail('CSP connect-src did not stop a cross-origin fetch');
 
 // Storage, read whole after every interaction: the two keys Starlight itself owns, each in its
 // own area and in the shape Starlight writes — nothing else may persist, and even they may not

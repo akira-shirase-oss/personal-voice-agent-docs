@@ -4,8 +4,11 @@
 // check drives its browser against this instead — the CSP, Referrer-Policy and
 // the rest it tests are the real deployed values, not a local approximation.
 //
-//   node scripts/serve-dist.mjs --port 58668
+//   node scripts/serve-dist.mjs --port 58668 [--nonce <value>]
 //
+// With --nonce, every response carries X-Serve-Dist-Nonce: the privacy check
+// spawns the server on port 0 with a fresh nonce and verifies the echo before
+// it browses, so a stale or foreign listener can never stand in for it.
 // The header parser is exported for scripts/serve-dist.test.mjs.
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
@@ -65,7 +68,7 @@ export function headersFor(rules, path) {
 	return Object.fromEntries([...out.values()].map(([name, value]) => [name, value]));
 }
 
-export function serveDir(dist, rules, port, host = '127.0.0.1') {
+export function serveDir(dist, rules, port, host = '127.0.0.1', nonce = null) {
 	const root = normalize(dist);
 	const server = createServer((req, res) => {
 		const path = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
@@ -94,6 +97,7 @@ export function serveDir(dist, rules, port, host = '127.0.0.1') {
 			return;
 		}
 		const headers = headersFor(rules, path);
+		if (nonce) headers['X-Serve-Dist-Nonce'] = nonce;
 		const sent = new Set(Object.keys(headers).map((n) => n.toLowerCase()));
 		if (!sent.has('content-type')) headers['Content-Type'] = TYPES[extname(file)] ?? 'application/octet-stream';
 		res.writeHead(200, headers);
@@ -108,9 +112,15 @@ export function serveDir(dist, rules, port, host = '127.0.0.1') {
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
-	const at = process.argv.indexOf('--port');
-	const port = Number(at === -1 ? 0 : process.argv[at + 1]) || 58668;
+	const arg = (name) => {
+		const at = process.argv.indexOf(name);
+		return at === -1 ? null : process.argv[at + 1];
+	};
+	// Port 0 is a real request — any free port, the bound one printed on listen.
+	const given = arg('--port');
+	const port = given === null ? 58668 : Number(given);
+	const nonce = arg('--nonce');
 	const rules = existsSync(join(DIST, '_headers')) ? parseHeaders(readFileSync(join(DIST, '_headers'), 'utf8')) : [];
-	serveDir(DIST, rules, port);
-	console.log(`serving ${DIST} on http://127.0.0.1:${port}`);
+	const server = serveDir(DIST, rules, port, '127.0.0.1', nonce);
+	server.on('listening', () => console.log(`serving ${DIST} on http://127.0.0.1:${server.address().port}`));
 }

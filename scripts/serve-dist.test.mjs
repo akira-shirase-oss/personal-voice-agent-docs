@@ -6,10 +6,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { parseHeaders, headersFor } from './serve-dist.mjs';
 import { storageVerdict } from './lib/allowed-storage.mjs';
+import { spawnDistServer, verifyNonce } from './lib/preview-server.mjs';
+import { isCspRefusal } from './lib/csp-probe.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
+const SERVE_DIST = join(ROOT, 'scripts', 'serve-dist.mjs');
 
 test('every matching rule applies, later rules winning per header', () => {
 	const rules = parseHeaders(`/*\n  X-One: a\n  X-Two: b\n\n/*.md\n  Content-Type: text/markdown\n`);
@@ -70,4 +76,68 @@ test('any other key fails wherever it is found', () => {
 		assert.ok(storageVerdict(area, 'pagefind-filters', '{}'));
 		assert.ok(storageVerdict(area, 'user-id', 'x'));
 	}
+});
+
+// ---- The spawned server is only ever trusted after it echoes its nonce. ----
+
+test('a spawned serve-dist answers on its printed port with the run\'s nonce', async () => {
+	const { proc, base, nonce } = spawnDistServer(SERVE_DIST);
+	try {
+		const url = await base;
+		assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/, 'it prints the bound address, not the requested one');
+		assert.equal(await verifyNonce(url, nonce), true, 'the spawn echoes its own nonce');
+	} finally {
+		proc.kill();
+	}
+});
+
+test('a pre-existing listener that never echoes the nonce is refused', async () => {
+	// The stale-daemon case: something already answers on the port, but it is not
+	// this run's spawn — the check must refuse to browse it.
+	const dummy = createServer((req, res) => res.writeHead(200, { 'Content-Type': 'text/html' }).end('<html>stale</html>'));
+	dummy.listen(0, '127.0.0.1');
+	await new Promise((r) => dummy.once('listening', r));
+	try {
+		const base = `http://127.0.0.1:${dummy.address().port}`;
+		assert.equal(await verifyNonce(base, randomUUID()), false, 'a foreign listener is refused, never browsed');
+	} finally {
+		dummy.close();
+	}
+});
+
+test('a serve-dist spawned without a nonce is refused too', async () => {
+	// Before nonces: the same server, but nothing marks it as this run's.
+	const proc = spawn(process.execPath, [SERVE_DIST, '--port', '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+	try {
+		const base = await new Promise((resolve, reject) => {
+			let buf = '';
+			const timer = setTimeout(() => reject(new Error('no address printed')), 10_000);
+			proc.stdout.on('data', (d) => {
+				buf += d;
+				const m = buf.match(/https?:\/\/[^\s]+/);
+				if (m) {
+					clearTimeout(timer);
+					resolve(m[0].replace(/\/$/, ''));
+				}
+			});
+			proc.on('exit', (code) => {
+				clearTimeout(timer);
+				reject(new Error(`exited ${code}`));
+			});
+		});
+		assert.equal(await verifyNonce(base, randomUUID()), false, 'a pre-nonce serve-dist does not verify');
+	} finally {
+		proc.kill();
+	}
+});
+
+// ---- The CSP probes: the refusal is the pass, any other error is not. ----
+
+test('a CSP violation error is the expected refusal; other errors are not', () => {
+	assert.ok(isCspRefusal(new Error("EvalError: Executing inline script violates the following Content Security Policy directive 'script-src'")), 'the thrown refusal counts as blocked');
+	assert.ok(isCspRefusal(new Error('Refused to load the script because of the content security policy directive')), 'the refused-to-load phrasing also counts');
+	assert.equal(isCspRefusal(new Error('page.goto: net::ERR_CONNECTION_REFUSED')), false, 'an unrelated error is a failure, not a pass');
+	assert.equal(isCspRefusal(new TypeError('Cannot read properties of null')), false);
+	assert.equal(isCspRefusal('a plain string'), false);
+	assert.equal(isCspRefusal(undefined), false);
 });
