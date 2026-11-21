@@ -22,8 +22,8 @@ const issue = (verdict: 'helpful' | 'not helpful') => {
 <div class="helpful not-content print:hidden" role="group" aria-labelledby="helpful-q">
 	<p id="helpful-q">Was this page helpful?</p>
 	<div class="helpful-answers">
-		<a href={issue('helpful')} rel="noopener" target="_blank">Yes</a>
-		<a href={issue('not helpful')} rel="noopener" target="_blank">No</a>
+		<a href={issue('helpful')} rel="noopener noreferrer" target="_blank">Yes</a>
+		<a href={issue('not helpful')} rel="noopener noreferrer" target="_blank">No</a>
 	</div>
 	<p class="helpful-note">Either answer opens a short issue on GitHub, so you can say what worked or what was missing.</p>
 </div>
