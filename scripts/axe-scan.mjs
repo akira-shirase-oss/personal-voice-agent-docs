@@ -1,6 +1,7 @@
-// Run by scripts/check-privacy.mjs inside the same Chromium context: it injects axe-core on the
-// current page, runs WCAG 2.2 AA plus best practices, and writes the violations to /tmp/axe-out.json
-// (or process.env.AXE_OUT). Kept separate so the scan can be reused standalone.
+// Run by scripts/check-privacy.mjs inside the bypassCSP accessibility context: it injects
+// axe-core on the current page, runs WCAG 2.2 AA plus best practices, and writes the
+// violations to /tmp/axe-out.json (or process.env.AXE_OUT). Kept separate so the scan can be
+// reused standalone — callers pass a page whose context may inject inline scripts.
 export default async function axeScan(page, { label = '', outFile = process.env.AXE_OUT ?? '/tmp/axe-out.json', include = ['wcag2a', 'wcag2aa', 'wcag22aa', 'best-practice'] } = {}) {
 	const { createRequire } = await import('node:module');
 	const { writeFileSync } = await import('node:fs');

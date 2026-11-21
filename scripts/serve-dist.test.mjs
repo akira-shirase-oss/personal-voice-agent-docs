@@ -13,6 +13,7 @@ import { parseHeaders, headersFor } from './serve-dist.mjs';
 import { storageVerdict } from './lib/allowed-storage.mjs';
 import { spawnDistServer, verifyNonce } from './lib/preview-server.mjs';
 import { isCspRefusal } from './lib/csp-probe.mjs';
+import { privacyContextOptions, axeContextOptions } from './lib/browser-contexts.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const SERVE_DIST = join(ROOT, 'scripts', 'serve-dist.mjs');
@@ -140,4 +141,12 @@ test('a CSP violation error is the expected refusal; other errors are not', () =
 	assert.equal(isCspRefusal(new TypeError('Cannot read properties of null')), false);
 	assert.equal(isCspRefusal('a plain string'), false);
 	assert.equal(isCspRefusal(undefined), false);
+});
+
+// ---- The context split: CSP is the subject in one, bypassed only for axe. ----
+
+test('the privacy context never bypasses the CSP it exists to test', () => {
+	const privacy = privacyContextOptions();
+	assert.equal(privacy.bypassCSP, undefined, 'the security subject must run the real policy');
+	assert.equal(axeContextOptions().bypassCSP, true, "only the accessibility context bypasses, for axe-core's inline injection");
 });

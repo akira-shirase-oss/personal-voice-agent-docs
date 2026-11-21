@@ -24,8 +24,10 @@
 // closed, search is used, and copy buttons are pressed — then storage, cookies and the request
 // log are checked again, because state written by an interaction counts the same.
 //
-// It also runs the accessibility scan (scripts/axe-scan.mjs) on the pages it visits — the same
-// browser, the same pass.
+// It also runs the accessibility scan (scripts/axe-scan.mjs) on the pages it visits — in a
+// second context with CSP bypassed, because axe injects as an inline script and the site's
+// script-src rightly refuses it. The privacy context never bypasses: the policy under test
+// is never the weakened one.
 //
 //   node scripts/check-privacy.mjs                          build is served by a spawned static server
 //   node scripts/check-privacy.mjs --pages /,/api/reference/   just these pages
@@ -35,6 +37,7 @@ import axeScan from './axe-scan.mjs';
 import { storageVerdict } from './lib/allowed-storage.mjs';
 import { spawnDistServer, verifyNonce } from './lib/preview-server.mjs';
 import { isCspRefusal } from './lib/csp-probe.mjs';
+import { privacyContextOptions, axeContextOptions } from './lib/browser-contexts.mjs';
 
 const sitemap = (await import('./lib/sitemap-pages.mjs')).default;
 
@@ -73,11 +76,11 @@ const ok = (url) => {
 };
 
 const browser = await chromium.launch();
-const context = await browser.newContext({
-	ignoreHTTPSErrors: true,
-	// Code-block copy buttons write the clipboard; granted so the handler runs.
-	permissions: ['clipboard-read', 'clipboard-write'],
-});
+// The privacy context keeps the site's real CSP — it is the subject of this check.
+const context = await browser.newContext(privacyContextOptions());
+// The axe context bypasses the CSP so axe-core's inline injection can run; nothing
+// privacy-relevant happens in it.
+const axeContext = await browser.newContext(axeContextOptions());
 
 // Every request the browser makes, and who made it. Anything off this origin is a bug.
 const requests = [];
@@ -146,6 +149,7 @@ const interact = async (page) => {
 };
 
 const page = await context.newPage();
+const axePage = await axeContext.newPage();
 const axeBad = [];
 for (const path of pages) {
 	const response = await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
@@ -162,7 +166,8 @@ for (const path of pages) {
 	await checkHints(page, path);
 	await checkExternalLinks(page, path);
 	await interact(page);
-	const violations = await axeScan(page, { label: path });
+	await axePage.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+	const violations = await axeScan(axePage, { label: path });
 	if (violations.length) axeBad.push({ path, violations });
 }
 
