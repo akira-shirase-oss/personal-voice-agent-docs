@@ -35,11 +35,16 @@ test('fences finds indented blocks and their info strings', () => {
 // child outlives the driver — and reported by name. This is the red main from the session
 // suite: pva_start's children held the driver's stderr open past the CI timeout and were left
 // running for hours.
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { driverLines, runDriver, timeoutReports, ROOT } from './snippets.mjs';
 
-const scratch = () => mkdtempSync(join(ROOT, '.snippets', 'test-'));
+// .snippets/ is gitignored — it does not exist on a fresh clone (the CI
+// ENOENT): the parent must be made before mkdtemp can fill it.
+const scratch = () => {
+	mkdirSync(join(ROOT, '.snippets'), { recursive: true });
+	return mkdtempSync(join(ROOT, '.snippets', 'test-'));
+};
 
 const dead = (pid) => {
 	try {
@@ -109,6 +114,24 @@ test('a leftover child cannot hold the driver\u2019s pipes past the last step', 
 		assert.equal(result.timedOut, false);
 		const sleeper = Number(readFileSync(join(dir, 'sleeper.pid'), 'utf8').trim());
 		assert.ok(await deadSoon(sleeper), 'the leftover child is reaped');
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('a timeout report carries the step\u2019s last stderr lines', async () => {
+	// The CI hang left no witnesses: a step blocked in a builtin writes nothing
+	// to .out, so its .err tail (and the service's) is all the report can show.
+	const dir = scratch();
+	try {
+		const step = { kind: 'run', suite: 'session', code: 'x', info: '', file: join(ROOT, 'src/content/docs/fake.mdx'), start: 0, end: 0, indent: '', raw: '' };
+		writeFileSync(join(dir, '0.timeout'), '0');
+		writeFileSync(join(dir, '0.err'), 'earlier line\n'.repeat(7) + 'error: manifest path `personal-voice-agent/Cargo.toml` does not exist\n');
+		const reports = timeoutReports(dir, [[0, step]]);
+		assert.equal(reports.length, 1);
+		assert.match(reports[0], /step 0 timed out/);
+		assert.match(reports[0], /step stderr: error: manifest path `personal-voice-agent\/Cargo\.toml` does not exist/);
+		assert.equal(reports[0].match(/step stderr:/g).length, 5, 'only the last five lines are carried');
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

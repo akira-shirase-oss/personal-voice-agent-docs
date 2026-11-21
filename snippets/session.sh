@@ -20,7 +20,11 @@
 pva_build() {
 	if [ -z "${PVA_BIN:-}" ]; then
 		: "${PVA_DIR:?set PVA_DIR to a personal-voice-agent checkout, or PVA_BIN to a built binary}"
-		cargo build -p voice-session --manifest-path "$PVA_DIR/Cargo.toml"
+		if [ ! -f "$PVA_DIR/Cargo.toml" ]; then
+			echo "pva_build: no Cargo.toml at $PVA_DIR (resolved from $(pwd)) — set PVA_DIR to the product checkout's absolute path, or PVA_BIN to a built binary" >&2
+			return 1
+		fi
+		cargo build -p voice-session --manifest-path "$PVA_DIR/Cargo.toml" || return 1
 		PVA_BIN="$PVA_DIR/target/debug/voice-session"
 	fi
 	export PVA_BIN
@@ -51,7 +55,7 @@ pva_cleanup() {
 }
 
 pva_start() {
-	pva_build
+	pva_build || return 1
 	local w="${PVA_WORK:-.}/session"
 	pva_cleanup
 	rm -rf "$w"
@@ -74,10 +78,29 @@ pva_start() {
 	"$PVA_BIN" --data-dir "$dir" <"$w/in" >"$w/out" 2>"$w/err" &
 	echo "$!" >"$w/pid"
 	echo "$dir" >"$w/data"
+	# A service that died at spawn leaves `in` with no reader — pva_send's
+	# fifo open would block the whole step. Check it survived a beat; the
+	# sleep's end also lets bash reap, so kill -0 tells the truth.
+	sleep 0.2
+	if ! kill -0 "$(cat "$w/pid")" 2>/dev/null; then
+		echo "pva_start: the service exited at spawn" >&2
+		[ -s "$w/err" ] && { echo "  last stderr:" >&2; tail -10 "$w/err" >&2; }
+		return 1
+	fi
 }
 
 pva_send() {
-	printf '%s\n' "$1" >>"${PVA_WORK:-.}/session/in"
+	local w="${PVA_WORK:-.}/session" pid
+	pid="$(cat "$w/pid" 2>/dev/null || true)"
+	# Opening `in` for write blocks until a reader appears — with a dead or
+	# never-started service that is forever. Fail the step fast, with the
+	# service's last stderr lines, rather than hang to the step bound.
+	if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+		echo "pva_send: the service is not running${pid:+ (pid $pid)}" >&2
+		[ -s "$w/err" ] && { echo "  last stderr:" >&2; tail -10 "$w/err" >&2; }
+		return 1
+	fi
+	printf '%s\n' "$1" >>"$w/in"
 }
 
 pva_expect() {
@@ -101,7 +124,7 @@ pva_expect() {
 
 pva_stop() {
 	local w="${PVA_WORK:-.}/session" pid
-	pid="$(cat "$w/pid")"
+	pid="$(cat "$w/pid" 2>/dev/null || true)"
 	pva_send '{"type":"shutdown"}' || true
 	for _ in $(seq 40); do
 		kill -0 "$pid" 2>/dev/null || break

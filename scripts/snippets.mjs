@@ -219,6 +219,13 @@ function bound(value, fallback) {
 // The marker dir is shared, so a later suite must not re-report earlier ones.
 export function timeoutReports(dir, suiteSteps) {
 	const mine = new Set(suiteSteps.map(([index]) => index));
+	const tail = (path, lines) => {
+		try {
+			return readFileSync(path, 'utf8').trimEnd().split('\n').filter(Boolean).slice(-lines);
+		} catch {
+			return [];
+		}
+	};
 	return readdirSync(dir)
 		.filter((name) => name.endsWith('.timeout'))
 		.map((name) => Number(name.slice(0, -'.timeout'.length)))
@@ -227,7 +234,16 @@ export function timeoutReports(dir, suiteSteps) {
 		.map((i) => {
 			const found = suiteSteps.find(([index]) => index === i);
 			const where = found ? relative(ROOT, found[1].file) : 'unknown file';
-			return `snippets: ${where} — step ${i} timed out; it and its process group were killed`;
+			// A blocked step often writes nothing before dying — the step's own
+			// stderr and the service's are the only witnesses to its cause.
+			const stepErr = tail(join(dir, `${i}.err`), 5);
+			const serviceErr = found?.[1].suite === 'session' ? tail(join(workdir, 'session', 'err'), 5) : [];
+			const detail = [
+				...stepErr.map((line) => `    step stderr: ${line}`),
+				...serviceErr.map((line) => `    service stderr: ${line}`),
+			];
+			return `snippets: ${where} — step ${i} timed out; it and its process group were killed`
+				+ (detail.length ? `\n${detail.join('\n')}` : '');
 		});
 }
 
@@ -237,6 +253,18 @@ async function runAll(steps) {
 	mkdirSync(dir, { recursive: true });
 	mkdirSync(workdir, { recursive: true });
 	// The session suite needs a real voice-session: fail up front, not mid-driver on stale output.
+	if (bySuiteHas(steps, 'session')) {
+		// The driver runs from $PVA_WORK, not the repo — a relative PVA_DIR or
+		// PVA_BIN resolves there, not here. Resolve both against the repo root
+		// now, or pva_build's cargo can't find the checkout and the service
+		// never spawns (CI's step-1 hang: pva_send then blocks on the fifo).
+		if (process.env.PVA_BIN) {
+			process.env.PVA_BIN = resolve(ROOT, process.env.PVA_BIN);
+		}
+		if (process.env.PVA_DIR) {
+			process.env.PVA_DIR = resolve(ROOT, process.env.PVA_DIR);
+		}
+	}
 	if (bySuiteHas(steps, 'session') && !process.env.PVA_BIN) {
 		const pvaDir = process.env.PVA_DIR ?? join(ROOT, '..', 'personal-voice-agent');
 		if (!existsSync(join(pvaDir, 'Cargo.toml'))) {
@@ -279,6 +307,9 @@ async function runAll(steps) {
 			const outFile = join(dir, `${i}.out`);
 			const statusFile = join(dir, `${i}.status`);
 			if (!existsSync(statusFile)) {
+				// A step with a .timeout marker was already reported by name —
+				// it ran and hung, so "never ran" is the wrong number for it.
+				if (existsSync(join(dir, `${i}.timeout`))) continue;
 				console.error(`snippets: ${relative(ROOT, step.file)} — step ${i} never ran (the session died first)`);
 				failed++;
 				continue;
